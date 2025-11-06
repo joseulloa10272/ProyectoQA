@@ -1,0 +1,8 @@
+{
+  "orden_id": "MNT0002",
+  "firmante": "DASD",
+  "timestamp": "2025-09-29 01:16:40",
+  "firma_img": "firma.png",
+  "firma_img_sha256": "418b0ecad4988d46a8a3ed96c15afabd58459cf4715fd6a9e24f952ef83d0f0f",
+  "hmac": "f372d2574669b5c874b9a52fe38848c24090b9e13b3728bbbeb0e224a2ea1c73"
+}

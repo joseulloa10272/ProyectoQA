@@ -1,0 +1,321 @@
+{
+  "users": {
+    "admin": {
+      "roles": [
+        "admin"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "Persona": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [
+        "reportes.generate"
+      ],
+      "perms_denied": []
+    },
+    "gerente": {
+      "roles": [
+        "gerente"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "a": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "A": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "u": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "t": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "F": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "dfjs": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "ks": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "FG": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "asdasd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "sadasd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "oasdfjkasjkdfa": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "asdfasf": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "sfjsdfjsdf": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "dsfsd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "SDFS": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "asd}": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "sdfd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "sdf": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "sd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "asd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "sad": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "ASD": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "ASDASD": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "SD": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "dsf": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "Paco": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "asfd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "asf": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "& C:/Users/josea/AppData/Local/Programs/Python/Python313/python.exe c:/Users/josea/Downloads/ProyectoQA/menu.py": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "safd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "adf": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "fsd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "sdas": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "za": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "asdas": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "2ed": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "sds": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "xd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "2e3": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "sfd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "dfsd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    },
+    "wd": {
+      "roles": [
+        "invitado"
+      ],
+      "perms_extra": [],
+      "perms_denied": []
+    }
+  }
+}

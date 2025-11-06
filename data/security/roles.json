@@ -1,0 +1,50 @@
+{
+  "roles": {
+    "admin": {
+      "permissions": [
+        "*"
+      ],
+      "inherits": []
+    },
+    "gerente": {
+      "permissions": [
+        "reportes.generate",
+        "reportes.schedule",
+        "activos.view",
+        "contratos.view",
+        "refacciones.list",
+        "mant.list",
+        "alertas.view",
+        "movimientos.list"
+      ],
+      "inherits": []
+    },
+    "tecnico": {
+      "permissions": [
+        "activos.view",
+        "refacciones.list",
+        "mant.create",
+        "mant.list",
+        "mant.change_state",
+        "mant.tasks.add",
+        "mant.reassign",
+        "mant.attach",
+        "mant.consume",
+        "mant.sign_close"
+      ],
+      "inherits": []
+    },
+    "invitado": {
+      "permissions": [
+        "activos.view"
+      ],
+      "inherits": []
+    },
+    "Gerente": {
+      "permissions": [
+        "activos.view"
+      ],
+      "inherits": []
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "orden_id": "MNT0003",
+  "firmante": "asd",
+  "timestamp": "2025-09-29 01:36:13",
+  "firma_img": "firma.png",
+  "firma_img_sha256": "418b0ecad4988d46a8a3ed96c15afabd58459cf4715fd6a9e24f952ef83d0f0f",
+  "hmac": "49ce89307cf7fddcbef6e022dddcd98c1ff0bb67d686c26140b38c8720a5c408"
+}

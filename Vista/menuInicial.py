@@ -4,6 +4,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import menuActivos
 import menuContratos
+import menuRefacciones
 
 def app(usuario):
     st.title("Funcionalidades")
@@ -26,7 +27,7 @@ def app(usuario):
 
         elif option  == "Refacciones":
             with funciones:
-                st.subheader ("Refacciones")
+                menuRefacciones.app(usuario)
 
         elif option  == "Geocercas":
             with funciones:

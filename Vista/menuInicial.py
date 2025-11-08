@@ -1,10 +1,16 @@
 import streamlit as st
 import sys
 import os
+
+# Rutas
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Vistas
 import menuActivos
 import menuContratos
 import menuRefacciones
+import menuGPS
+import menuRFID
 
 def app(usuario):
     st.title("Funcionalidades")
@@ -13,30 +19,32 @@ def app(usuario):
 
     with opciones:
         option = st.radio(
-        label = "Seleccione la función que desea realizar:",
-        options  = ("Activos", "Contratos", "Refacciones", "Geocercas", "Mantenimientos", "Reportes")
+            label="Seleccione la función que desea realizar:",
+            options=("Activos", "Contratos", "Refacciones", "GPS", "RFID", "Geocercas", "Mantenimientos", "Reportes")
         )
         st.markdown("---")
-        if option  == "Activos":
-            with funciones:
-                menuActivos.app(usuario)
 
-        elif option  == "Contratos":
-            with funciones:
-                menuContratos.app(usuario)
+    with funciones:
+        if option == "Activos":
+            menuActivos.app(usuario)
 
-        elif option  == "Refacciones":
-            with funciones:
-                menuRefacciones.app(usuario)
+        elif option == "Contratos":
+            menuContratos.app(usuario)
 
-        elif option  == "Geocercas":
-            with funciones:
-                st.subheader ("Geocercas")
+        elif option == "Refacciones":
+            menuRefacciones.app(usuario)
 
-        elif option  == "Mantenimientos":
-            with funciones:
-                st.subheader ("Mantenimientos")
+        elif option == "GPS":
+            menuGPS.app(usuario)
 
-        elif option  == "Reportes":
-            with funciones:
-                st.subheader ("Reportes")
+        elif option == "RFID":
+            menuRFID.app(usuario)
+
+        elif option == "Geocercas":
+            st.subheader("Geocercas")
+
+        elif option == "Mantenimientos":
+            st.subheader("Mantenimientos")
+
+        elif option == "Reportes":
+            st.subheader("Reportes")

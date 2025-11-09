@@ -10,6 +10,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from Persistencia.base import pathPair, readTable, writeTable  # noqa: E402
 from Persistencia.activosPersistencia import colsActivos, cargarActivos  # noqa: E402
+from Persistencia.activosPersistencia import existeIdUnico, existeTagEnActivos
+
 
 # Intento de API de contratos; si falla, se usa archivo
 try:
@@ -353,3 +355,13 @@ def _map_activo_meta(dfc: pd.DataFrame) -> dict[str, dict]:
             # si el mismo activo aparece en varios contratos, la última fila prevalece
             mapa[aid] = {"cliente": cli, "id_contrato": idc, "estado": est}
     return mapa
+
+def cargarHistorialMovimientos(id_activo, fecha_inicio, fecha_fin):
+    """Consulta el historial de movimientos de un activo entre dos fechas."""
+    # Suponiendo que tienes un archivo o base de datos con el historial de movimientos
+    historial = readTable('movimientos')  # Cargar historial desde un archivo
+    # Filtrar por activo y por fechas
+    historial = historial[historial['id_activo'] == id_activo]
+    historial = historial[(historial['fecha'] >= str(fecha_inicio)) & (historial['fecha'] <= str(fecha_fin))]
+    
+    return historial

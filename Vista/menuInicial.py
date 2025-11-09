@@ -10,7 +10,6 @@ import menuActivos
 import menuContratos
 import menuRefacciones
 import menuGPS
-import menuRFID
 import menuMantenimiento
 import menuGeocercas
 import menuReportes
@@ -39,9 +38,6 @@ def app(usuario):
 
         elif option == "GPS":
             menuGPS.app(usuario)
-
-        elif option == "RFID":
-            menuRFID.app(usuario)
 
         elif option == "Geocercas":
             menuGeocercas.app(usuario)

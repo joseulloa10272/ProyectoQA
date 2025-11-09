@@ -316,3 +316,4 @@ def _shape_from_draw(res):
         return {"type": "circle", "center": [float(center[0]), float(center[1])], "radius_m": float(radius)}
 
     return None
+

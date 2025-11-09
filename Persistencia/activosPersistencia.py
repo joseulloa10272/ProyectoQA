@@ -121,7 +121,7 @@ def registrarActivosRfid(rfid_code: str, usuario: str) -> Tuple[bool, str | int]
     # Para importaciones RFID no se fuerza id_unico, queda vacío si no viene en catálogo
     nuevo = {
         "id": str(nuevoId),
-        "id_unico": str(data.get("id_unico", "")).strip(),
+        "id_unico": str(nuevoId),
         "modelo": data.get("modelo", ""),
         "serie": data.get("serie", ""),
         "fabricante": data.get("fabricante", ""),
@@ -352,3 +352,46 @@ def existeTagEnActivos(tag: str) -> bool:
     serie = df["tag"].astype(str).str.strip().str.lower()
     serie = serie[serie != ""]       # descartar vacíos existentes
     return serie.eq(t).any()
+
+# Persistencia/activosPersistencia.py
+
+def cargarHistorialMovimientos(id_activo: str, fecha_inicio: str, fecha_fin: str) -> pd.DataFrame:
+    """
+    Carga el historial de movimientos de un activo entre dos fechas específicas.
+    :param id_activo: ID del activo
+    :param fecha_inicio: Fecha de inicio para el filtrado (formato 'YYYY-MM-DD')
+    :param fecha_fin: Fecha de fin para el filtrado (formato 'YYYY-MM-DD')
+    :return: DataFrame con el historial de movimientos filtrado por fechas
+    """
+    # Supongamos que hay una tabla de movimientos que incluye el id_activo, latitud, longitud, fecha, etc.
+    historial_df = readTable('historialMovimientosXlsx', 'historialMovimientosCsv', ['id_activo', 'latitud', 'longitud', 'fecha', 'detalle'])
+
+    # Aseguramos que las fechas estén en formato adecuado
+    historial_df['fecha'] = pd.to_datetime(historial_df['fecha'], errors='coerce')
+
+    # Filtramos por el ID del activo y las fechas
+    historial_df = historial_df[historial_df['id_activo'] == id_activo]
+    historial_df = historial_df[(historial_df['fecha'] >= fecha_inicio) & (historial_df['fecha'] <= fecha_fin)]
+
+    return historial_df
+
+# Persistencia/activosPersistencia.py
+
+def registrarMovimiento(id_activo: str, latitud: float, longitud: float, detalle: str) -> None:
+    """
+    Registra un movimiento de un activo en la base de datos.
+    :param id_activo: ID del activo
+    :param latitud: Latitud de la nueva ubicación
+    :param longitud: Longitud de la nueva ubicación
+    :param detalle: Detalle del movimiento (por ejemplo, "entrada", "salida")
+    """
+    df_historial = readTable('historialMovimientosXlsx', 'historialMovimientosCsv', ['id_activo', 'latitud', 'longitud', 'fecha', 'detalle'])
+    nuevo_movimiento = {
+        "id_activo": id_activo,
+        "latitud": latitud,
+        "longitud": longitud,
+        "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "detalle": detalle
+    }
+    df_historial = pd.concat([df_historial, pd.DataFrame([nuevo_movimiento])], ignore_index=True)
+    writeTable(df_historial, 'historialMovimientosXlsx', 'historialMovimientosCsv')

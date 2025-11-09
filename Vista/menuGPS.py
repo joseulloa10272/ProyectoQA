@@ -2,113 +2,130 @@
 import streamlit as st
 import pandas as pd
 import folium
+import sys
+import os
 from streamlit_folium import st_folium
 
 try:
     from streamlit_autorefresh import st_autorefresh
-    _AUTOREFRESH = True
+    _AR = True
 except Exception:
-    _AUTOREFRESH = False
+    _AR = False
 
-import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from Persistencia.gpsPersistencia import cargarPosiciones, catalogos, contratos_norm
 
-# ✅ Import correcto según Persistencia/gpsPersistencia.py
-from Persistencia.gpsPersistencia import cargarPosiciones
 
-def _centro(df):
-    try:
-        lat = pd.to_numeric(df["latitud"], errors="coerce").dropna()
-        lon = pd.to_numeric(df["longitud"], errors="coerce").dropna()
-        if len(lat) and len(lon):
-            return float(lat.mean()), float(lon.mean())
-    except Exception:
-        pass
-    return 9.75, -83.75  # Centro aproximado de CR
+def _centro(df: pd.DataFrame) -> tuple[float, float]:
+    lat = pd.to_numeric(df.get("latitud", pd.Series(dtype=float)), errors="coerce").dropna()
+    lon = pd.to_numeric(df.get("longitud", pd.Series(dtype=float)), errors="coerce").dropna()
+    if len(lat) and len(lon):
+        return float(lat.mean()), float(lon.mean())
+    return 9.75, -83.75  # CR fallback
+
 
 def app(usuario: str = ""):
     st.header("Seguimiento GPS de activos")
-    st.caption("Visualización de posiciones con actualización periódica, filtros por cliente, contrato y estado, e indicador de coordenadas vigentes")
 
-    intervalo = st.select_slider("Intervalo de actualización", options=[2, 5, 10, 15, 30], value=5, help="segundos")
-    if _AUTOREFRESH:
-        st_autorefresh(interval=intervalo * 1000, key="gps_refresh")
+    # Intervalo de actualización
+    intervalo = st.select_slider(
+        "Intervalo de actualización",
+        options=[2, 5, 10, 15, 30],
+        value=5,
+        key="gps_intervalo"
+    )
+    if _AR:
+        st_autorefresh(interval=intervalo * 1000, key="gps_autorefresh")
 
-    # ✅ Uso del nombre de función correcto
-    df = cargarPosiciones()
-    if df is None or len(df) == 0:
-        st.warning("Aún no hay posiciones registradas")
-        return
+    # Catálogos estrictos desde contratos y dataframe para filtros dependientes
+    cats = catalogos()
+    dfc = contratos_norm()
 
-    # Normalización
-    df = df.copy()
-    df["latitud"] = pd.to_numeric(df["latitud"], errors="coerce")
-    df["longitud"] = pd.to_numeric(df["longitud"], errors="coerce")
-    df["cliente"] = df.get("cliente", "").astype(str)
-    df["contrato"] = df.get("contrato", "").astype(str)
-    df["estado"] = df.get("estado", "").astype(str)
-    df = df.dropna(subset=["latitud","longitud"])
-
-    if df.empty:
-        st.info("No hay activos con coordenadas válidas")
-        return
-
-    # Filtros
+    # Filtros dependientes
     c1, c2, c3 = st.columns(3)
     with c1:
-        f_cli = st.selectbox("Cliente", ["Todos"] + sorted([x for x in df["cliente"].unique() if x]))
+        cli = st.selectbox("Cliente", ["Todos"] + cats["clientes"], key="gps_filtro_cliente")
+
+    # contratos válidos según cliente
+    if cli == "Todos":
+        contratos_cli = sorted(dfc["id_contrato"].unique().tolist())
+        estados_cli = sorted(dfc["estado"].unique().tolist())
+    else:
+        sub = dfc[dfc["cliente"] == cli]
+        contratos_cli = sorted(sub["id_contrato"].unique().tolist())
+        estados_cli = sorted(sub["estado"].unique().tolist())
+
     with c2:
-        f_con = st.selectbox("Contrato", ["Todos"] + sorted([x for x in df["contrato"].unique() if x]))
+        con = st.selectbox("Contrato", ["Todos"] + contratos_cli, key="gps_filtro_contrato")
+
+    # estados válidos según cliente y contrato
+    if con == "Todos":
+        sub_est = dfc if cli == "Todos" else dfc[dfc["cliente"] == cli]
+        estados_list = sorted(sub_est["estado"].unique().tolist())
+    else:
+        sub_est = dfc[dfc["id_contrato"] == con]
+        estados_list = sorted(sub_est["estado"].unique().tolist())
+
     with c3:
-        f_est = st.selectbox("Estado", ["Todos"] + sorted([x for x in df["estado"].unique() if x]))
+        est = st.selectbox("Estado", ["Todos"] + estados_list, key="gps_filtro_estado")
 
-    df_f = df.copy()
-    if f_cli != "Todos":
-        df_f = df_f[df_f["cliente"] == f_cli]
-    if f_con != "Todos":
-        df_f = df_f[df_f["contrato"] == f_con]
-    if f_est != "Todos":
-        df_f = df_f[df_f["estado"] == f_est]
-
-    if df_f.empty:
-        st.info("No hay activos que cumplan los filtros seleccionados")
+    # Cargar posiciones ya sincronizadas contra contratos
+    df = cargarPosiciones(sync_desde_activos=True)
+    if df is None or df.empty:
+        st.info("No hay registros para mostrar.")
         return
 
-    # Indicador de coordenadas vivas para un activo puntual
-    activos = df_f["id_activo"].astype(str).unique().tolist()
-    elegido = st.selectbox("Activo a monitorear", activos)
-    fila = df_f[df_f["id_activo"].astype(str) == str(elegido)].tail(1)
+    # Aplicar filtros coherentes con contratos
+    if cli != "Todos":
+        df = df[df["cliente"] == cli]
+    if con != "Todos":
+        df = df[df["contrato"] == con]
+    if est != "Todos":
+        df = df[df["estado"] == est]
+
+    if df.empty:
+        st.info("Sin coincidencias para los filtros.")
+        return
+
+    # Selector de activo
+    activos = df["id_activo"].astype(str).unique().tolist()
+    elegido = st.selectbox("Activo a monitorear", activos, key="gps_activo_sel")
+
+    fila = df[df["id_activo"].astype(str) == str(elegido)].tail(1)
     if not fila.empty:
-        lat = float(fila.iloc[0]["latitud"]); lon = float(fila.iloc[0]["longitud"])
-        ts = str(fila.iloc[0].get("ultima_actualizacion",""))
-        st.info(f"Coordenadas actuales de {elegido}: lat {lat:.6f}, lon {lon:.6f} — última actualización: {ts}")
+        lat_sel = pd.to_numeric(fila.iloc[0]["latitud"], errors="coerce")
+        lon_sel = pd.to_numeric(fila.iloc[0]["longitud"], errors="coerce")
+        ts = str(fila.iloc[0].get("ultima_actualizacion", ""))
+        st.info(f"Coordenadas actuales de {elegido}: lat {float(lat_sel):.6f}, lon {float(lon_sel):.6f} — última actualización: {ts}")
 
     # Mapa
-    lat_c, lon_c = _centro(df_f)
-    m = folium.Map(location=[lat_c, lon_c], zoom_start=8, tiles="CartoDB positron")
-    for _, r in df_f.iterrows():
-        popup = folium.Popup(
-            f"<b>Activo:</b> {r['id_activo']}<br>"
-            f"<b>Cliente:</b> {r['cliente']}<br>"
-            f"<b>Contrato:</b> {r['contrato']}<br>"
-            f"<b>Estado:</b> {r['estado']}<br>"
-            f"<b>Lat:</b> {float(r['latitud']):.6f} — <b>Lon:</b> {float(r['longitud']):.6f}<br>"
-            f"<b>Actualizado:</b> {r.get('ultima_actualizacion','')}",
-            max_width=300
-        )
+    lat_c, lon_c = _centro(df)
+    mapa = folium.Map(location=[lat_c, lon_c], zoom_start=8, tiles="CartoDB positron")
+
+    for _, r in df.dropna(subset=["latitud", "longitud"]).iterrows():
+        try:
+            lat = float(r["latitud"]); lon = float(r["longitud"])
+        except Exception:
+            continue
         folium.Marker(
-            [float(r["latitud"]), float(r["longitud"])],
+            [lat, lon],
             tooltip=f"{r['id_activo']}",
-            popup=popup,
-            icon=folium.Icon(color="blue", icon="info-sign")
-        ).add_to(m)
+            popup=folium.Popup(
+                f"<b>Activo:</b> {r.get('id_activo','')}<br>"
+                f"<b>Cliente:</b> {r.get('cliente','')}<br>"
+                f"<b>Contrato:</b> {r.get('contrato','')}<br>"
+                f"<b>Estado:</b> {r.get('estado','')}<br>"
+                f"<b>Actualizado:</b> {r.get('ultima_actualizacion','')}",
+                max_width=320
+            )
+        ).add_to(mapa)
 
-    st_folium(m, height=480, width=800, key="gps_map")
+    st_folium(mapa, height=480, width=800, key="gps_map")
 
-    # Tabla compacta
+    # Tabla
     st.markdown("#### Posiciones")
-    st.dataframe(
-        df_f[["id_activo","cliente","contrato","estado","latitud","longitud","ultima_actualizacion"]]
-        .sort_values("ultima_actualizacion", ascending=False),
-        use_container_width=True
-    )
+    cols_show = ["id_activo", "cliente", "contrato", "estado", "latitud", "longitud", "ultima_actualizacion"]
+    df_show = df[cols_show].copy()
+    df_show["__ts"] = pd.to_datetime(df_show["ultima_actualizacion"], errors="coerce")
+    df_show = df_show.sort_values("__ts", ascending=False, na_position="last").drop(columns="__ts")
+    st.dataframe(df_show, use_container_width=True)

@@ -80,3 +80,6 @@ def obtenerResumenGPS():
     por_estado = df["estado"].value_counts().to_dict()
     ultima = df["ultima_actualizacion"].max()
     return {"total": total, "por_estado": por_estado, "ultima": ultima}
+
+
+ 

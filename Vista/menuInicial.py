@@ -11,6 +11,7 @@ import menuContratos
 import menuRefacciones
 import menuGPS
 import menuRFID
+import menuGeocercas
 
 def app(usuario):
     st.title("Funcionalidades")
@@ -20,7 +21,7 @@ def app(usuario):
     with opciones:
         option = st.radio(
             label="Seleccione la función que desea realizar:",
-            options=("Activos", "Contratos", "Refacciones", "GPS", "RFID", "Geocercas", "Mantenimientos", "Reportes")
+            options=("Activos", "Contratos", "Refacciones", "GPS", "RFID", "Geocercas", "Mantenimientos", "Reportes"),
         )
         st.markdown("---")
 
@@ -41,10 +42,11 @@ def app(usuario):
             menuRFID.app(usuario)
 
         elif option == "Geocercas":
-            st.subheader("Geocercas")
+            menuGeocercas.app(usuario)
 
         elif option == "Mantenimientos":
             st.subheader("Mantenimientos")
 
         elif option == "Reportes":
             st.subheader("Reportes")
+            

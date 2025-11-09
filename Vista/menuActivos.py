@@ -9,6 +9,8 @@ import folium
 from streamlit_folium import st_folium
 from datetime import date
 from Persistencia.gpsPersistencia import actualizarPosicion
+from datetime import datetime, timedelta
+from Persistencia.movimientosPersistencia import filter_movimientos
 
 # Rutas de import
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -42,7 +44,7 @@ def app(usuario):
 
     option = st.radio(
         label="Seleccione una función:",
-        options=("Registrar", "Registrar por RFID", "Importación masiva", "Mostrar", "Seguimiento GPS"),
+        options=("Registrar", "Registrar por RFID", "Importación masiva", "Mostrar", "Seguimiento GPS", "Historial de Movimientos"),
     )
 
     # ======================================
@@ -367,3 +369,23 @@ def app(usuario):
     # ======================================
     elif option == "Seguimiento GPS":
         menuGPS.app(usuario)
+
+    # ======================================
+    # OPCIÓN 6: HISTORIAL DE MOVIMIENTOS
+    # ======================================
+
+    elif option == "Historial de Movimientos":
+        if tipoUsuario != "Administrador":
+            st.warning("No tiene permiso para ver el historial de movimientos de activos")
+            return
+        st.subheader("Historial de Movimientos de Activos")
+
+        # Entradas para filtro por fecha y ubicación
+        fecha_inicio = st.date_input("Fecha de inicio", datetime.now() - timedelta(days=90))
+        fecha_fin = st.date_input("Fecha de fin", datetime.now())
+        ubicacion = st.text_input("Ubicación")
+
+        # Filtrar y mostrar el historial
+        if st.button("Filtrar Movimientos"):
+            movimientos = filter_movimientos(fecha_inicio, fecha_fin, ubicacion)
+            st.write(movimientos)

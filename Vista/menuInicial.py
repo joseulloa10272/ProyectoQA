@@ -13,6 +13,7 @@ import menuGPS
 import menuRFID
 import menuMantenimiento
 import menuGeocercas
+import menuReportes
 
 def app(usuario):
     st.title("Funcionalidades")
@@ -49,5 +50,5 @@ def app(usuario):
             menuMantenimiento.app(usuario)
 
         elif option == "Reportes":
-            st.subheader("Reportes")
+            menuReportes.app(usuario)
             

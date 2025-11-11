@@ -1,47 +1,27 @@
-# Persistencia/gpsPersistencia.py
-import os
-import sys
-from datetime import datetime
+# Persistencia/gpsPersistencia.py  — versión unificada y compatible con menuGPS.py
+
+import os, sys, re, json
+from datetime import datetime, date
 import pandas as pd
-import re 
 
-# Rutas
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from Persistencia.base import pathPair, readTable, writeTable
+from Persistencia.activosPersistencia import colsActivos, cargarActivos
 
-from Persistencia.base import pathPair, readTable, writeTable  # noqa: E402
-from Persistencia.activosPersistencia import colsActivos, cargarActivos  # noqa: E402
-from Persistencia.activosPersistencia import existeIdUnico, existeTagEnActivos
-
-
-# Intento de API de contratos; si falla, se usa archivo
-try:
-    from Persistencia.contratosPersistencia import cargarContratos  # noqa: F401
-    _HAS_CONTRATOS_API = True
-except Exception:
-    _HAS_CONTRATOS_API = False
-
-gpsXlsx, gpsCsv = pathPair("gpsActivos")
+# Archivos estándar
+posXlsx, posCsv   = pathPair("posiciones")
+histXlsx, histCsv = pathPair("historialMovimientos")
 activosXlsx, activosCsv = pathPair("activos")
 contratosXlsx, contratosCsv = pathPair("contratos")
 
-GPS_COLS = [
-    "id_activo", "cliente", "contrato", "estado",
-    "latitud", "longitud", "ultima_actualizacion"
-]
-
-# ---------------- Utilidades básicas ----------------
+# Esquemas
+POS_COLS  = ["id_activo","cliente","contrato","estado","latitud","longitud","ultima_actualizacion"]
+HIST_COLS = ["id_activo","latitud","longitud","fecha","detalle"]
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def _ensure_cols(df: pd.DataFrame | None, cols: list[str]) -> pd.DataFrame:
-    if df is None:
-        df = pd.DataFrame(columns=cols)
-    for c in cols:
-        if c not in df.columns:
-            df[c] = pd.NA
-    return df[cols]
-
+# ---------- normalización de contratos ----------
 def _parse_ts(s):
     try:
         return pd.to_datetime(s, errors="coerce")
@@ -49,9 +29,8 @@ def _parse_ts(s):
         return pd.NaT
 
 def _estado_contrato(fini, ffin, umbral=60) -> str:
-    hoy = pd.Timestamp.now().normalize()
-    ini = _parse_ts(fini)
-    fin = _parse_ts(ffin)
+    hoy = pd.Timestamp(date.today())
+    ini = _parse_ts(fini); fin = _parse_ts(ffin)
     if pd.isna(fin):
         return ""
     if hoy > fin:
@@ -59,309 +38,179 @@ def _estado_contrato(fini, ffin, umbral=60) -> str:
     if not pd.isna(ini) and hoy < ini:
         return "Pendiente"
     dias = int((fin - hoy).days)
-    if 0 <= dias <= umbral:
-        return "Por vencer"
-    return "Vigente"
-
-def _split_ids(raw: str) -> list[str]:
-    if not isinstance(raw, str):
-        raw = str(raw)
-    raw = raw.replace(";", ",")
-    if "," in raw:
-        return [x.strip() for x in raw.split(",") if x.strip()]
-    val = raw.strip()
-    return [val] if val else []
-
-# ---------------- Carga y normalización de catálogos ----------------
-
-def _load_activos_df() -> pd.DataFrame:
-    try:
-        lst = cargarActivos()
-        df = pd.DataFrame(lst, columns=colsActivos)
-    except Exception:
-        df = readTable(activosXlsx, activosCsv, colsActivos)
-
-    df = df.copy() if df is not None else pd.DataFrame(columns=["id_unico", "latitud", "longitud"])
-    for c in ("id_unico", "latitud", "longitud"):
-        if c not in df.columns:
-            df[c] = pd.NA
-
-    df["id_unico"] = df["id_unico"].astype(str).str.strip()
-    df["latitud"] = pd.to_numeric(df["latitud"], errors="coerce")
-    df["longitud"] = pd.to_numeric(df["longitud"], errors="coerce")
-    return df
-
-def _id_contrato_col(dfc: pd.DataFrame) -> str | None:
-    for k in ("id_contrato", "contrato", "codigo", "codigoContrato", "id"):
-        if k in dfc.columns:
-            return k
-    return None
-
-def _load_contratos_df() -> pd.DataFrame:
-    dfc: pd.DataFrame | None = None
-
-    if _HAS_CONTRATOS_API:
-        try:
-            data = cargarContratos()
-            dfc = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
-        except Exception:
-            dfc = None
-
-    if dfc is None or dfc.empty:
-        try:
-            dfc = readTable(contratosXlsx, contratosCsv, [])
-        except Exception:
-            dfc = None
-
-    if dfc is None:
-        dfc = pd.DataFrame()
-
-    # Normalización laxa
-    idc = _id_contrato_col(dfc) or "id_contrato"
-    if idc != "id_contrato":
-        dfc = dfc.rename(columns={idc: "id_contrato"})
-    if "id_contrato" not in dfc.columns:
-        dfc["id_contrato"] = ""
-
-    if "cliente" not in dfc.columns:
-        for k in ("Cliente", "cliente_nombre", "customer", "entidad"):
-            if k in dfc.columns:
-                dfc = dfc.rename(columns={k: "cliente"})
-                break
-    if "cliente" not in dfc.columns:
-        dfc["cliente"] = ""
-
-    ini = next((k for k in ("fechaInicio", "inicio", "start", "fecha_inicio", "start_date") if k in dfc.columns), None)
-    fin = next((k for k in ("fechaFin", "fin", "end", "fecha_fin", "end_date") if k in dfc.columns), None)
-    if ini and ini != "fechaInicio":
-        dfc = dfc.rename(columns={ini: "fechaInicio"})
-    if fin and fin != "fechaFin":
-        dfc = dfc.rename(columns={fin: "fechaFin"})
-    if "fechaInicio" not in dfc.columns:
-        dfc["fechaInicio"] = ""
-    if "fechaFin" not in dfc.columns:
-        dfc["fechaFin"] = ""
-
-    if "activos" not in dfc.columns:
-        if "activosAsociados" in dfc.columns:
-            dfc = dfc.rename(columns={"activosAsociados": "activos"})
-        else:
-            for c in ("id_activo", "id_unico", "activo"):
-                if c in dfc.columns:
-                    dfc["activos"] = dfc[c].astype(str)
-                    break
-    if "activos" not in dfc.columns:
-        dfc["activos"] = ""
-
-    if "estado" not in dfc.columns:
-        dfc["estado"] = ""
-    dfc["estado_calc"] = [_estado_contrato(fi, ff) for fi, ff in zip(dfc["fechaInicio"], dfc["fechaFin"])]
-    dfc.loc[dfc["estado"].astype(str).str.strip().eq(""), "estado"] = dfc["estado_calc"]
-
-    # Tipos básicos
-    for col in ("id_contrato", "cliente", "estado", "activos"):
-        dfc[col] = dfc[col].astype(str).str.strip()
-
-    return dfc
-
-def _map_activo_meta(dfc: pd.DataFrame) -> dict[str, dict]:
-    """Devuelve mapa id_activo -> {cliente, id_contrato, estado} a partir de contratos."""
-    mapa: dict[str, dict] = {}
-    for _, r in dfc.iterrows():
-        idc = r.get("id_contrato", "")
-        cli = r.get("cliente", "")
-        est = r.get("estado", "") or r.get("estado_calc", "")
-        for aid in _split_ids(r.get("activos", "")):
-            mapa[aid] = {"cliente": cli, "id_contrato": idc, "estado": est}
-    return mapa
-
-def _catalogos_validos(dfc: pd.DataFrame) -> tuple[set, set, set]:
-    clientes = set(dfc.get("cliente", pd.Series(dtype=str)).astype(str).str.strip())
-    contratos = set(dfc.get("id_contrato", pd.Series(dtype=str)).astype(str).str.strip())
-    estados = set(dfc.get("estado", pd.Series(dtype=str)).astype(str).str.strip())
-    clientes.discard(""); contratos.discard(""); estados.discard("")
-    return clientes, contratos, estados
-
-# ---------------- API pública ----------------
-
-def cargarPosiciones(sync_desde_activos: bool = True) -> pd.DataFrame:
-    df_gps = readTable(gpsXlsx, gpsCsv, GPS_COLS)
-    df_gps = _ensure_cols(df_gps, GPS_COLS)
-    df_gps["id_activo"] = df_gps["id_activo"].astype(str).str.strip()
-    df_gps["latitud"]  = pd.to_numeric(df_gps["latitud"], errors="coerce")
-    df_gps["longitud"] = pd.to_numeric(df_gps["longitud"], errors="coerce")
-
-    if sync_desde_activos:
-        dfc   = _load_contratos_df()
-        mapa  = _map_activo_meta(dfc)              # universo de seguimiento: solo activos presentes en contratos
-        ids   = sorted(set(mapa.keys()))
-
-        df_act = _load_activos_df()
-        idx    = df_act.set_index("id_unico")      # catálogo de coordenadas
-
-        registros = []
-        for aid in ids:
-            meta = mapa[aid]
-            lat = idx.at[aid, "latitud"]  if aid in idx.index else pd.NA
-            lon = idx.at[aid, "longitud"] if aid in idx.index else pd.NA
-
-            # conservar timestamp previo si la fila ya existía
-            m = df_gps["id_activo"] == aid
-            ts_prev = df_gps.loc[m, "ultima_actualizacion"].iloc[0] if m.any() else ""
-            ts = _now() if (pd.notna(lat) and pd.notna(lon)) else ts_prev
-
-            registros.append({
-                "id_activo": aid,
-                "cliente":   meta.get("cliente", ""),
-                "contrato":  meta.get("id_contrato", ""),
-                "estado":    meta.get("estado", ""),
-                "latitud":   lat,
-                "longitud":  lon,
-                "ultima_actualizacion": ts
-            })
-
-        df_gps = pd.DataFrame(registros, columns=GPS_COLS)
-
-    writeTable(df_gps, gpsXlsx, gpsCsv)
-    return df_gps
-
-def actualizarPosicion(
-    id_activo: str,
-    latitud: float,
-    longitud: float,
-    ts: str | None = None
-) -> dict:
-    """
-    Actualiza coordenadas de un activo presente en contratos, si el id no figura en contratos
-    se rechaza la operación.
-    """
-    dfc = _load_contratos_df()
-    mapa = _map_activo_meta(dfc)
-    aid = str(id_activo).strip()
-    if aid not in mapa:
-        raise ValueError(f"El activo {aid} no está asociado a ningún contrato vigente o registrado.")
-
-    df = cargarPosiciones(sync_desde_activos=True)
-    lat = float(latitud); lon = float(longitud)
-    stamp = ts or _now()
-
-    m = df["id_activo"].astype(str).str.strip().eq(aid)
-    if not m.any():
-        meta = mapa[aid]
-        fila = {
-            "id_activo": aid,
-            "cliente": meta.get("cliente", ""),
-            "contrato": meta.get("id_contrato", ""),
-            "estado": meta.get("estado", ""),
-            "latitud": lat,
-            "longitud": lon,
-            "ultima_actualizacion": stamp
-        }
-        df = pd.concat([df, pd.DataFrame([fila])], ignore_index=True)
-    else:
-        i = df.index[m][0]
-        df.at[i, "latitud"] = lat
-        df.at[i, "longitud"] = lon
-        df.at[i, "ultima_actualizacion"] = stamp
-        # cliente/contrato/estado siguen dictados por el contrato
-
-    writeTable(df, gpsXlsx, gpsCsv)
-    return df[df["id_activo"].astype(str).str.strip().eq(aid)].iloc[0].to_dict()
-
-def catalogos() -> dict:
-    """Catálogos estrictos basados solo en contratos."""
-    dfc = _load_contratos_df()
-    cli, con, est = _catalogos_validos(dfc)
-    return {"clientes": sorted(cli), "contratos": sorted(con), "estados": sorted(est)}
-
-# utilidades públicas para la vista
-def contratos_norm() -> pd.DataFrame:
-    """Devuelve el DataFrame de contratos normalizado para construir filtros dependientes en la vista."""
-    return _load_contratos_df().copy()
-
-def obtenerPosiciones():
-    return cargarPosiciones(sync_desde_activos=True)
+    return "Por vencer" if 0 <= dias <= umbral else "Vigente"
 
 def _normalize_activo_id(s: str) -> str:
-    """
-    Normaliza un elemento de la columna 'activos' de contratos y devuelve el id_unico.
-    Soporta formatos como:
-      '100001 - ECG-3000 (Hospital México)'
-      ['01 - M11 (111)']
-      100003
-    Regla: tomar el primer token antes de un guion '-' o del primer espacio.
-    """
     if s is None:
         return ""
-    txt = str(s).strip()
-
-    # eliminar envoltorios de listas/tuplas y comillas
-    txt = txt.strip("[]()\"' ").strip()
-    # si el valor vino como "100001 - Modelo ..." tomar la cabeza antes del guion
+    txt = str(s).strip().strip("[]()\"' ")
     if "-" in txt:
         txt = txt.split("-", 1)[0].strip()
-    # si aún queda espacio, tomar el primer token
     if " " in txt:
         txt = txt.split(" ", 1)[0].strip()
-
-    # limpiar cualquier carácter no alfanumérico remanente al inicio/fin
-    txt = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", txt)
-    return txt
-
+    return re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", txt)
 
 def _split_ids(raw: str) -> list[str]:
-    """
-    Divide la columna 'activos' en ids individuales, limpia brackets y comillas,
-    acepta separadores ',' o ';' y devuelve ids normalizados listos para cruzar
-    con activos.xlsx.
-    """
     if not isinstance(raw, str):
         raw = str(raw)
     s = raw.strip()
-
-    # si viene como lista textual, quitar brackets
     if s.startswith("[") and s.endswith("]"):
-        s = s[1:-1]
-
-    # unificar separadores
+        try:
+            arr = json.loads(s)
+            return [ _normalize_activo_id(x) for x in arr if _normalize_activo_id(x) ]
+        except Exception:
+            s = s[1:-1]
     s = s.replace(";", ",")
-
     parts = [p.strip() for p in s.split(",")] if "," in s else [s]
     out = []
     for p in parts:
-        p = p.strip().strip("\"'").strip()
-        nid = _normalize_activo_id(p)
+        nid = _normalize_activo_id(p.strip().strip("\"'"))
         if nid:
             out.append(nid)
     return out
 
+def _load_activos_df() -> pd.DataFrame:
+    try:
+        df = pd.DataFrame(cargarActivos(), columns=colsActivos)
+    except Exception:
+        df = readTable(activosXlsx, activosCsv, colsActivos)
+    for c in ("id","id_unico","latitud","longitud"):
+        if c not in df.columns:
+            df[c] = pd.NA
+    df["id"] = df["id"].astype(str).str.strip()
+    df["latitud"]  = pd.to_numeric(df["latitud"], errors="coerce")
+    df["longitud"] = pd.to_numeric(df["longitud"], errors="coerce")
+    return df
+
+def _load_contratos_df() -> pd.DataFrame:
+    try:
+        from Persistencia.contratosPersistencia import cargarContratos
+        dfc = cargarContratos()
+        dfc = dfc if isinstance(dfc, pd.DataFrame) else pd.DataFrame(dfc)
+    except Exception:
+        dfc = readTable(contratosXlsx, contratosCsv,
+                        ["id","cliente","fechaInicio","fechaFin","activosAsociados","estado","diasNotificar"])
+    if "id_contrato" not in dfc.columns:
+        dfc = dfc.rename(columns={"id":"id_contrato"}) if "id" in dfc.columns else dfc.assign(id_contrato="")
+    if "activos" not in dfc.columns:
+        dfc = dfc.rename(columns={"activosAsociados":"activos"}) if "activosAsociados" in dfc.columns else dfc.assign(activos="")
+    for need in ("cliente","fechaInicio","fechaFin","estado","diasNotificar"):
+        if need not in dfc.columns:
+            dfc[need] = ""
+    if dfc["estado"].astype(str).str.strip().eq("").any():
+        dfc.loc[:, "estado"] = [
+            _estado_contrato(fi, ff) for fi, ff in zip(dfc["fechaInicio"], dfc["fechaFin"])
+        ]
+    return dfc
 
 def _map_activo_meta(dfc: pd.DataFrame) -> dict[str, dict]:
-    """id_activo -> {cliente, id_contrato, estado} desde contratos, limitado a 5 activos por contrato."""
-    mapa: dict[str, dict] = {}
+    mapa = {}
     for _, r in dfc.iterrows():
-        idc = str(r.get("id_contrato", "")).strip()
-        cli = str(r.get("cliente", "")).strip()
-        est = str(r.get("estado", "") or r.get("estado_calc", "")).strip()
-
-        ids = _split_ids(r.get("activos", ""))
-        if not ids:
-            continue
-
-        # respetar máximo 5 activos por contrato
-        ids = ids[:5]
-
-        for aid in ids:
-            # si el mismo activo aparece en varios contratos, la última fila prevalece
+        idc = str(r.get("id_contrato","")).strip()
+        cli = str(r.get("cliente","")).strip()
+        est = str(r.get("estado","")).strip()
+        for aid in _split_ids(r.get("activos","")):
             mapa[aid] = {"cliente": cli, "id_contrato": idc, "estado": est}
     return mapa
 
-def cargarHistorialMovimientos(id_activo, fecha_inicio, fecha_fin):
-    """Consulta el historial de movimientos de un activo entre dos fechas."""
-    # Suponiendo que tienes un archivo o base de datos con el historial de movimientos
-    historial = readTable('movimientos')  # Cargar historial desde un archivo
-    # Filtrar por activo y por fechas
-    historial = historial[historial['id_activo'] == id_activo]
-    historial = historial[(historial['fecha'] >= str(fecha_inicio)) & (historial['fecha'] <= str(fecha_fin))]
-    
-    return historial
+# ---------- sincronización y API pública ----------
+def _sync_from_activos(df_pos: pd.DataFrame) -> pd.DataFrame:
+    df_act = _load_activos_df()
+    if df_act.empty:
+        return df_pos
+    dfc  = _load_contratos_df()
+    mapa = _map_activo_meta(dfc)
+    df_pos = df_pos.copy()
+
+    for _, a in df_act.iterrows():
+        aid = str(a.get("id","")).strip()
+        lat = pd.to_numeric(a.get("latitud"), errors="coerce")
+        lon = pd.to_numeric(a.get("longitud"), errors="coerce")
+        if not aid or pd.isna(lat) or pd.isna(lon):
+            continue
+        meta = mapa.get(aid, {"cliente":"", "id_contrato":"", "estado":""})
+        m = df_pos["id_activo"].astype(str).str.strip().eq(aid)
+        ts = _now()
+        if not m.any():
+            fila = {
+                "id_activo": aid, "cliente": meta["cliente"], "contrato": meta["id_contrato"],
+                "estado": meta["estado"], "latitud": float(lat), "longitud": float(lon),
+                "ultima_actualizacion": ts
+            }
+            df_pos = pd.concat([df_pos, pd.DataFrame([fila])], ignore_index=True)
+            df_hist = readTable(histXlsx, histCsv, HIST_COLS)
+            if df_hist[df_hist["id_activo"].astype(str).str.strip().eq(aid)].empty:
+                df_hist = pd.concat([df_hist, pd.DataFrame([{
+                    "id_activo": aid, "latitud": float(lat), "longitud": float(lon),
+                    "fecha": ts, "detalle": "sincronizacion_inicial"
+                }])], ignore_index=True)
+                writeTable(df_hist, histXlsx, histCsv)
+        else:
+            i = df_pos.index[m][0]
+            # enriquecimiento de metadatos si estaban vacíos
+            if meta["cliente"]:
+                df_pos.at[i, "cliente"]  = meta["cliente"]
+                df_pos.at[i, "contrato"] = meta["id_contrato"]
+                df_pos.at[i, "estado"]   = meta["estado"]
+    return df_pos
+
+def cargarPosiciones(id_activo: str | None = None, *args, **kwargs) -> pd.DataFrame:
+    """
+    Carga posiciones con compatibilidad hacia 'sync_desde_activos=True' y hacia archivos legados con columna 'fecha'.
+    """
+    df_pos = readTable(posXlsx, posCsv, POS_COLS)
+    if "ultima_actualizacion" not in df_pos.columns and "fecha" in df_pos.columns:
+        df_pos = df_pos.rename(columns={"fecha": "ultima_actualizacion"})
+        df_pos = df_pos.reindex(columns=POS_COLS, fill_value="")
+        writeTable(df_pos, posXlsx, posCsv)
+    if kwargs.get("sync_desde_activos") is True:
+        df_pos = _sync_from_activos(df_pos)
+        writeTable(df_pos, posXlsx, posCsv)
+    if id_activo:
+        return df_pos[df_pos["id_activo"].astype(str).str.strip().eq(str(id_activo).strip())]
+    return df_pos
+
+def actualizarPosicion(id_activo: str, latitud: float, longitud: float, detalle: str = "manual") -> dict:
+    aid = str(id_activo).strip()
+    lat = float(latitud); lon = float(longitud); ts = _now()
+    df_pos  = readTable(posXlsx, posCsv, POS_COLS)
+    df_hist = readTable(histXlsx, histCsv, HIST_COLS)
+    meta = _map_activo_meta(_load_contratos_df()).get(aid, {"cliente":"", "id_contrato":"", "estado":""})
+
+    m = df_pos["id_activo"].astype(str).str.strip().eq(aid)
+    if not m.any():
+        fila = {"id_activo": aid, "cliente": meta["cliente"], "contrato": meta["id_contrato"],
+                "estado": meta["estado"], "latitud": lat, "longitud": lon,
+                "ultima_actualizacion": ts}
+        df_pos = pd.concat([df_pos, pd.DataFrame([fila])], ignore_index=True)
+    else:
+        i = df_pos.index[m][0]
+        df_pos.at[i, "latitud"] = lat
+        df_pos.at[i, "longitud"] = lon
+        df_pos.at[i, "ultima_actualizacion"] = ts
+
+    df_hist = pd.concat([df_hist, pd.DataFrame([{
+        "id_activo": aid, "latitud": lat, "longitud": lon, "fecha": ts, "detalle": str(detalle)
+    }])], ignore_index=True)
+
+    writeTable(df_pos, posXlsx, posCsv)
+    writeTable(df_hist, histXlsx, histCsv)
+    return df_pos[df_pos["id_activo"].astype(str).str.strip().eq(aid)].iloc[0].to_dict()
+
+def cargarHistorialMovimientos(id_activo: str | None = None) -> pd.DataFrame:
+    df = readTable(histXlsx, histCsv, HIST_COLS)
+    if id_activo:
+        df = df[df["id_activo"].astype(str).str.strip().eq(str(id_activo).strip())]
+    return df
+
+# Catálogos para filtros en la vista GPS
+def catalogos() -> dict:
+    dfc = _load_contratos_df()
+    return {
+        "clientes": sorted(set(dfc["cliente"].astype(str).str.strip()) - {""}),
+        "contratos": sorted(set(dfc["id_contrato"].astype(str).str.strip()) - {""}),
+        "estados": sorted(set(dfc["estado"].astype(str).str.strip()) - {""}),
+    }
+
+def contratos_norm() -> pd.DataFrame:
+    return _load_contratos_df().copy()

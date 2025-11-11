@@ -36,7 +36,7 @@ def app(usuario):
         elif option == "Refacciones":
             menuRefacciones.app(usuario)
 
-        elif option == "GPS":
+        elif option == "Seguimiento GPS":
             menuGPS.app(usuario)
 
         elif option == "Geocercas":

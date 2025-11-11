@@ -33,6 +33,17 @@ def _credenciales():
         raise ValueError("Faltan credenciales de correo: defina GMAIL_USER y GMAIL_APP_PASSWORD en st.secrets o variables de entorno.")
     return user, pwd
 
+# Persistencia/notificacionesEmail.py
+import os, ssl, smtplib, mimetypes
+from email.message import EmailMessage
+# … deja intactas _HAS_ST, _credenciales(), etc.
+
+def _smtp_debug_on(smtp: smtplib.SMTP | smtplib.SMTP_SSL):
+    try:
+        if os.getenv("SMTP_DEBUG", "").strip() == "1":
+            smtp.set_debuglevel(1)  # imprime diálogo SMTP en terminal
+    except Exception:
+        pass
 
 def enviar_email(asunto: str,
                  cuerpo: str,
@@ -41,16 +52,16 @@ def enviar_email(asunto: str,
                  bcc: list[str] | None = None,
                  archivos: list[str] | None = None,
                  reply_to: str | None = None) -> tuple[bool, str]:
-    """
-    Envía un correo por SMTP Gmail (SSL 465). Retorna (ok, mensaje).
-    Los adjuntos se pasan como rutas de archivo; se detecta su MIME automáticamente.
-    """
+
     try:
         remitente, password = _credenciales()
         if isinstance(destinatarios, str):
             destinatarios = [destinatarios]
         cc  = cc  or []
         bcc = bcc or []
+        todos = destinatarios + cc + bcc
+        if not todos:
+            return False, "Sin destinatarios."
 
         msg = EmailMessage()
         msg["Subject"] = asunto
@@ -60,39 +71,39 @@ def enviar_email(asunto: str,
             msg["Cc"]  = ", ".join(cc)
         if reply_to:
             msg["Reply-To"] = reply_to
-
+        msg["X-Mailer"] = "Gestemed/SMTP"
         msg.set_content(cuerpo)
 
-        # Adjuntos
         for path in (archivos or []):
             try:
-                ctype, encoding = mimetypes.guess_type(path)
+                ctype, _ = mimetypes.guess_type(path)
                 maintype, subtype = (ctype or "application/octet-stream").split("/", 1)
                 with open(path, "rb") as f:
-                    msg.add_attachment(f.read(),
-                                       maintype=maintype,
-                                       subtype=subtype,
-                                       filename=os.path.basename(path))
+                    msg.add_attachment(f.read(), maintype=maintype, subtype=subtype, filename=os.path.basename(path))
             except Exception as e:
                 return False, f"Adjunto inválido ({path}): {e}"
 
-        # Envío
         context = ssl.create_default_context()
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as smtp:
-            smtp.login(remitente, password)
-            smtp.send_message(msg, to_addrs=destinatarios + cc + bcc)
 
-        return True, "Correo enviado correctamente."
+        # Intento 1: SSL 465
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as smtp:
+                _smtp_debug_on(smtp)
+                smtp.login(remitente, password)
+                smtp.send_message(msg, to_addrs=todos)
+            return True, f"Correo enviado a: {', '.join(todos)} via SSL:465"
+        except Exception as e1:
+            # Intento 2: STARTTLS 587
+            try:
+                with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
+                    _smtp_debug_on(smtp)
+                    smtp.ehlo()
+                    smtp.starttls(context=context)
+                    smtp.ehlo()
+                    smtp.login(remitente, password)
+                    smtp.send_message(msg, to_addrs=todos)
+                return True, f"Correo enviado a: {', '.join(todos)} via STARTTLS:587"
+            except Exception as e2:
+                return False, f"SMTP falló. SSL465: {repr(e1)} | STARTTLS587: {repr(e2)}"
     except Exception as e:
-        return False, f"Fallo al enviar correo: {e}"
-
-
-def enviar_prueba(destino: str | None = None) -> tuple[bool, str]:
-    """
-    Envía un correo de prueba a 'destino' o al propio remitente si no se indica.
-    """
-    user, _ = _credenciales()
-    to = destino or user
-    asunto = "Prueba de notificación Gestemed"
-    cuerpo = "Este es un mensaje de prueba del módulo de notificaciones. Si lo ves, el canal SMTP está correcto."
-    return enviar_email(asunto, cuerpo, [to])
+        return False, f"Fallo al enviar correo: {repr(e)}"

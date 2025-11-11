@@ -1,6 +1,4 @@
-#!/bin/sh
-'''exec' "/Users/joseulloa10272/Library/CloudStorage/OneDrive-EstudiantesITCR/Tecnológico de Costa Rica/VIII Semestre/Calidad de sistemas de información/ProyectoQA/.venv/bin/python3.12" "$0" "$@"
-' '''
+#!/Users/joseulloa10272/ProyectoQA/.venv/bin/python3.14
 import sys
 from pip._internal.cli.main import main
 if __name__ == '__main__':

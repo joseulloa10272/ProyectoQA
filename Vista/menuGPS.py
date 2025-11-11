@@ -71,6 +71,9 @@ def app(usuario: str = ""):
 
     # Cargar posiciones ya sincronizadas contra contratos
     df = cargarPosiciones(sync_desde_activos=True)
+    # justo después de: df = cargarPosiciones(sync_desde_activos=True)
+    if "ultima_actualizacion" not in df.columns and "fecha" in df.columns:
+        df["ultima_actualizacion"] = df["fecha"]
     if df is None or df.empty:
         st.info("No hay registros para mostrar.")
         return

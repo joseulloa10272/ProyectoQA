@@ -49,3 +49,6 @@ urllib3==2.5.0
 wheel==0.45.1
 xlsxwriter==3.2.9
 folium==0.14.0
+APScheduler==3.10.4
+tzlocal>=5.0
+pytz

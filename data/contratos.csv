@@ -1,0 +1,9 @@
+id,cliente,fechaInicio,fechaFin,condiciones,activosAsociados,diasNotificar,estado,dias_restantes
+1,Jose,2025-11-08,2025-11-20,Edde,['100000 - M (Cliente)'],30,Por vencer,9
+2,Manuel,2025-11-08,2025-11-22,Notas,"['100002 - InfusionPump X2 (TEC-Clinic)', '100003 - Vent-Plus 5 (Hospital San Vicente)', '100001 - ECG-3000 (Hospital México)']",20,Por vencer,11
+3,Eddye,2025-11-05,2025-11-09,No existe condicion ,"['01 - M11 (111)', '100000 - M (Cliente)']",30,Vencido,-2
+4,Eddye,2025-11-04,2025-11-06,No,['100002 - InfusionPump X2 (TEC-Clinic)'],30,Vencido,-5
+5,Lucia,2025-11-08,2025-11-09,Norma,"['01 - M11 (111)', '100001 - ECG-3000 (Hospital México)']",30,Vencido,-2
+6,Lucia,2025-11-08,2025-11-09,Norma,"['01 - M11 (111)', '100001 - ECG-3000 (Hospital México)']",4,Vencido,-2
+7,Sergio ,2025-11-06,2025-11-14,Causa,['08 - M4 ()'],30,Por vencer,3
+8,Eddye1,2025-09-02,2025-10-01,no hay condición,"['100003 - Vent-Plus 5 (Hospital San Vicente)', '100002 - InfusionPump X2 (TEC-Clinic)', '100001 - ECG-3000 (Hospital México)', '01 - M11 (111)', '7 - Servidor (Banco Nacional)']",1,Vencido,-41

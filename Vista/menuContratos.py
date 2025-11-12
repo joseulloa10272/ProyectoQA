@@ -214,63 +214,76 @@ def _enviar_alertas_por_correo(usuario: str, destinatario: str | None = None, df
         return False, f"Fallo al enviar correo: {e}"
 
 
-# ============== Diálogo de alertas con destinatario editable ==============
+# --- helper robusto para encontrar el correo del usuario actual ---
+def _resolver_correo_destino(usuario: str) -> str | None:
+    candidatos = [
+        usuario,
+        st.session_state.get("usuario"),
+        st.session_state.get("user"),
+        st.session_state.get("nombreUsuario"),
+    ]
+    for cand in candidatos:
+        try:
+            if cand:
+                correo = _get_user_email(str(cand))
+                if correo:
+                    return correo
+        except Exception:
+            pass
+    return None
+
+# === diálogo SIEMPRE refrescando el snapshot al abrir ===
+# ============== Diálogo de alertas: refresco automático y correo claro ==============
 @st.dialog("Contratos por vencer")
-def mostrarContratosPorVencer():
+def mostrarContratosPorVencer(usuario: str):
     try:
         dfv = None
-        if _ALERTAS_OK and callable(cargarAlertas):
-            dfA = cargarAlertas()
-            if dfA is None or dfA.empty:
-                st.info("Sin alertas activas en este momento.")
-                return
-            dfv = _dedupe_por_id_ui(dfA)
+        # 1) cálculo en caliente
+        if callable(generarAlertasVencimiento_en_caliente):
+            try:
+                dfv = generarAlertasVencimiento_en_caliente()
+            except Exception as e:
+                st.caption(f"No fue posible actualizar automáticamente las alertas: {e}")
 
-            # Barra de acciones
-            ctop1, ctop2, ctop3 = st.columns([1, 1, 1])
-            with ctop1:
-                if st.button("Recalcular alertas", key="ct_alert_recalc"):
-                    try:
-                        if callable(generarAlertasVencimiento_en_caliente):
-                            generarAlertasVencimiento_en_caliente()
-                            dfv = _dedupe_por_id_ui(cargarAlertas())
-                            st.toast("Snapshot actualizado", icon="✅")
-                    except Exception as e:
-                        st.error(f"No se actualizaron las alertas: {e}")
+        # 2) rescates en cascada si llegara vacío
+        if dfv is None or dfv.empty:
+            try:
+                dfv = cargarAlertas() if callable(cargarAlertas) else None
+            except Exception:
+                dfv = None
+        if dfv is None or dfv.empty:
+            try:
+                pv = proximosVencimientos(365) if callable(proximosVencimientos) else None
+                if pv is not None and not pv.empty:
+                    dfv = pv.rename(columns={"id":"id_contrato"})[["id_contrato","cliente","fechaFin","dias_restantes"]]
+                    dfv["umbral"] = pd.to_numeric(pv.get("diasNotificar", 30), errors="coerce").fillna(30).astype(int)
+                    dfv["estado"] = "Por vencer"
+            except Exception:
+                pass
 
-            with ctop2:
-                default_dest = _get_user_email(st.session_state.get("usuario","")) or ""
-                dest_input = st.text_input("Enviar a", value=default_dest, placeholder="correo@dominio.com", key="ct_alert_dest")
+        # 3) encabezado de correo
+        destino = _get_user_email(usuario) or ""
+        st.text_input("Enviar a", value=destino, disabled=True)
 
-            with ctop3:
-                if st.button("Enviar por correo", key="ct_alert_send"):
-                    usr = st.session_state.get("usuario","")
-                    dest = dest_input.strip() or None
-                    ok, msg = _enviar_alertas_por_correo(usr, destinatario=dest)
-                    st.success(msg) if ok else st.error(msg)
-                    try:
-                        dfv = _dedupe_por_id_ui(cargarAlertas())
-                    except Exception:
-                        pass
-
-            # Grilla
-            cols = [c for c in ["id_contrato","cliente","fechaFin","dias_restantes","umbral","estado","ts_alerta","notificado"] if c in dfv.columns]
-            st.dataframe(dfv[cols] if cols else dfv, use_container_width=True, hide_index=True)
+        # 4) sin datos reales
+        if dfv is None or dfv.empty:
+            st.info("Sin alertas activas en este momento.")
             return
 
-        # Fallback a próximos vencimientos cuando no existe módulo de alertas
-        if callable(proximosVencimientos):
-            df = proximosVencimientos(90)
-            if df is None or df.empty:
-                st.info("No hay contratos por vencer en los próximos 90 días.")
-                return
-            cols = [c for c in ["id","cliente","fechaFin","dias_restantes","estado"] if c in df.columns]
-            st.dataframe(df[cols].sort_values("dias_restantes"), use_container_width=True, hide_index=True)
-        else:
-            st.info("El módulo de vencimientos no está disponible en este entorno.")
+        dfv = _dedupe_por_id_ui(dfv)
+        cols = [c for c in ["id_contrato","cliente","fechaFin","dias_restantes","umbral","estado"] if c in dfv.columns]
+
+        if st.button("Enviar por correo", key="ct_alert_send"):
+            ok, msg = _enviar_alertas_por_correo(usuario, destinatario=destino, df_alertas=dfv)
+            st.success(msg) if ok else st.error(msg)
+            try:
+                dfv = _dedupe_por_id_ui(cargarAlertas())
+            except Exception:
+                pass
+
+        st.dataframe(dfv[cols] if cols else dfv, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"No fue posible consultar los vencimientos: {e}")
-
 
 # ========================= Interfaz principal =========================
 def app(usuario: str):
@@ -335,7 +348,7 @@ def app(usuario: str):
 
     # ---------------- Mostrar Contratos ----------------
     if option == "Mostrar Contratos":
-        mostrarContratosPorVencer()
+        mostrarContratosPorVencer(usuario)
 
         tipoUsuario = obtenerTipoUsuario(usuario)
         if tipoUsuario not in ["Administrador", "Gerente"]:
@@ -368,6 +381,7 @@ def app(usuario: str):
                 cols = [c for c in colsContratos if c in out.columns]
                 if cols:
                     out = out[cols]
+        
             st.dataframe(out, use_container_width=True, hide_index=True, key="ct_grid")
         except Exception as e:
             st.error(f"No fue posible cargar los contratos: {e}")

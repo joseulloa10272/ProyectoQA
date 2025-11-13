@@ -1,9 +1,0 @@
-id_contrato,cliente,fechaFin,dias_restantes,umbral,estado,ts_alerta,notificado
-1,Jose,2025-11-20,9,30,Por vencer,2025-11-11 09:23:23,
-10,Ana,2025-11-21,10,30,Por vencer,2025-11-11 09:23:23,
-11,Ricardo,2025-11-29,18,30,Por vencer,2025-11-11 09:23:23,
-12,Laura,2025-11-12,1,30,Por vencer,2025-11-11 09:23:23,
-13,Cam,2025-11-21,10,30,Por vencer,2025-11-11 09:23:23,
-2,Manuel,2025-11-22,11,20,Por vencer,2025-11-11 09:23:23,
-7,Sergio ,2025-11-14,3,30,Por vencer,2025-11-11 09:23:23,
-9,Maria,2025-12-11,30,60,Por vencer,2025-11-11 09:23:23,

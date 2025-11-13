@@ -1,319 +1,388 @@
-# Persistencia/geocercasPersistencia.py
+# Persistencia/geocercasPersistencia.py — versión robusta y compatible con el menú nuevo
 from __future__ import annotations
-import os, sys, json, math
-from datetime import datetime
+import json, re, ast
+from datetime import datetime, timedelta
+from typing import List, Dict, Tuple
 import pandas as pd
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from Persistencia.base import pathPair, readTable, writeTable  # noqa: E402
-from Persistencia.gpsPersistencia import cargarPosiciones, catalogos  # para catálogos/monitoreo
-from Persistencia.notificacionesEmail import enviar_email  # canal de salida
+from Persistencia.base import pathPair, readTable, writeTable
+from Persistencia.gpsPersistencia import cargarPosiciones
+from Persistencia.activosPersistencia import cargarActivosDf
 
-# Rutas de almacenamiento
-geoXlsx, geoCsv           = pathPair("geocercas")
-alertXlsx, alertCsv       = pathPair("alertasGeocercas")
-estadoXlsx, estadoCsv     = pathPair("geocercasEstado")
+# Email opcional
+try:
+    from Persistencia.notificacionesEmail import enviar_email
+except Exception:
+    enviar_email = None
 
-# Esquemas
-GEO_COLS = [
-    "id_geocerca", "nombre", "tipo",          # tipo: circle | polygon
-    "cliente", "contrato", "activos",         # filtros de alcance (opcionales)
-    "modo",                                   # entrada | salida | ambos
-    "emails",                                 # comma-separated
-    "shape_json",                             # dict serializado: circle:{center:[lat,lon],radius_m}, polygon:{vertices:[[lat,lon],...]}
-    "activa",                                 # bool
-    "creado_por", "creado_en", "ultima_alerta_global"
-]
+def _email_de_usuario(usuario: str) -> str | None:
+    try:
+        from Persistencia.usuarioPersistencia import obtenerEmailUsuario as _get
+        return _get(usuario)
+    except Exception:
+        try:
+            from Persistencia.usuarioPersistencia import obtenerCorreoUsuario as _get_alt
+            return _get_alt(usuario)
+        except Exception:
+            return None
 
-ALERTA_COLS = [
-    "ts", "id_geocerca", "nombre",
-    "id_activo", "cliente", "contrato",
-    "evento",           # ENTRADA | SALIDA
-    "latitud", "longitud", "dist_m",
-    "detalle", "enviado_email"
-]
+geoXlsx, geoCsv       = pathPair("geocercas")
+estadoXlsx, estadoCsv = pathPair("geocercasEstado")
+alertXlsx, alertCsv   = pathPair("alertasGeocercas")
 
-ESTADO_COLS = ["id_geocerca", "id_activo", "dentro", "ts"]
+GEO_COLS    = ["id_geocerca","nombre","tipo","cliente","contrato","activos","modo","emails","shape_json","activa","creado_por","creado_en","ultima_alerta_global"]
+EST_COLS    = ["id_geocerca","id_activo","id_unico","dentro","ts"]
+ALERTA_COLS = ["ts","id_geocerca","nombre","id_activo","id_unico","evento","latitud","longitud","dist_m","detalle","enviado_email"]
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def _ensure(df: pd.DataFrame | None, cols: list[str]) -> pd.DataFrame:
-    df = df if df is not None else pd.DataFrame(columns=cols)
-    for c in cols:
-        if c not in df.columns:
-            df[c] = pd.NA
-    return df[cols]
+# ========== normalizaciones ==========
+def _norm_id_token(txt: str) -> str:
+    if txt is None:
+        return ""
+    s = str(txt).strip()
+    s = s.split(" - ")[0].split(" ")[0]
+    m = re.match(r"^\d+(?:\.\d+)?$", s)
+    return m.group(0) if m else s
 
-# ----------------- I/O de geocercas -----------------
-
-def cargarGeocercas() -> pd.DataFrame:
-    df = readTable(geoXlsx, geoCsv, GEO_COLS)
-    return _ensure(df, GEO_COLS)
-
-def guardarGeocerca(reg: dict) -> dict:
-    df = cargarGeocercas()  # Se carga el DataFrame de geocercas
-    # id si no viene
-    if not reg.get("id_geocerca"):
-        reg["id_geocerca"] = f"G{int(datetime.now().timestamp())}"  # Asigna un ID único basado en el timestamp
-    reg["creado_en"] = reg.get("creado_en") or _now()
-    reg["ultima_alerta_global"] = reg.get("ultima_alerta_global", "")
-    reg["activa"] = bool(reg.get("activa", True))
-    # Normaliza los datos
-    for k in ("cliente", "contrato", "activos", "emails", "modo", "tipo", "nombre", "creado_por"):
-        reg[k] = str(reg.get(k, "") or "").strip()
-    if isinstance(reg.get("activos"), list):
-        reg["activos"] = ",".join([str(x).strip() for x in reg["activos"]])
-    if isinstance(reg.get("emails"), list):
-        reg["emails"] = ",".join([str(x).strip() for x in reg["emails"]])
-    if not isinstance(reg.get("shape_json"), str):
-        reg["shape_json"] = json.dumps(reg.get("shape_json", {}))  # Serializa el shape de la geocerca
-
-    # Inserta o actualiza el registro
-    m = df["id_geocerca"].astype(str).eq(reg["id_geocerca"])  # Verifica si la geocerca ya existe
-    if m.any():
-        for k, v in reg.items():
-            df.loc[m, k] = v  # Si existe, actualiza los valores
+def _parse_ids(raw) -> List[str]:
+    if isinstance(raw, list):
+        base = raw
+    elif isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            base = []
+        else:
+            try:
+                v = json.loads(s)
+                base = v if isinstance(v, list) else [s]
+            except Exception:
+                try:
+                    v = ast.literal_eval(s)
+                    base = v if isinstance(v, list) else [s]
+                except Exception:
+                    base = [p.strip() for p in s.replace(";", ",").split(",") if p.strip()]
     else:
-        df = pd.concat([df, pd.DataFrame([reg])], ignore_index=True)  # Si no existe, agrega una nueva geocerca
+        base = []
+    return [_norm_id_token(x) for x in base if _norm_id_token(x)]
 
-    # Guardar los cambios en el archivo
-    writeTable(df, geoXlsx, geoCsv)  # Guarda el DataFrame actualizado en el archivo
+def _parse_polygon(shape_json) -> List[Tuple[float,float]]:
+    """
+    Retorna [(lat,lon), ...] bien formado desde:
+      - dict GeoJSON con 'coordinates'
+      - string JSON o literal Python
+      - lista con pares [lon,lat] o [lat,lon]
+    """
+    val = shape_json
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return []
+        try:
+            val = json.loads(s)
+        except Exception:
+            try:
+                val = ast.literal_eval(s)
+            except Exception:
+                return []
+    if isinstance(val, dict):
+        coords = val.get("coordinates") or val.get("geometry", {}).get("coordinates") or []
+    else:
+        coords = val
+    # desanidar [[[ ... ]]] -> [[ ... ]]
+    if isinstance(coords, list) and coords and isinstance(coords[0], (list, tuple)) and coords and isinstance(coords[0][0], (list, tuple)):
+        coords = coords[0]
 
-    return reg  # Retorna el registro guardado
+    pts: List[Tuple[float,float]] = []
+    if not isinstance(coords, list):
+        return pts
+    for p in coords:
+        if not isinstance(p, (list, tuple)) or len(p) < 2:
+            continue
+        a, b = float(p[0]), float(p[1])
+        # heurística: si a luce longitud y b latitud, invierte
+        if abs(a) > 90 and abs(b) <= 90:
+            lat, lon = b, a
+        elif abs(a) <= 90 and abs(b) > 90:
+            lat, lon = a, b
+        else:
+            lat, lon = a, b
+        pts.append((lat, lon))
+    return pts
 
-
-def eliminarGeocerca(id_geocerca: str) -> bool:
-    df = cargarGeocercas()
-    m = df["id_geocerca"].astype(str).eq(str(id_geocerca))
-    if not m.any():
+def _point_in_poly(lat: float, lon: float, poly_latlon: List[Tuple[float,float]]) -> bool:
+    n = len(poly_latlon)
+    if n < 3:
         return False
-    df = df[~m].copy()
-    writeTable(df, geoXlsx, geoCsv)
-    # limpiar estados asociados
-    est = _ensure(readTable(estadoXlsx, estadoCsv, ESTADO_COLS), ESTADO_COLS)
-    est = est[~est["id_geocerca"].astype(str).eq(str(id_geocerca))]
-    writeTable(est, estadoXlsx, estadoCsv)
-    return True
-
-# ----------------- Utilidades geométricas -----------------
-
-def _haversine_m(lat1, lon1, lat2, lon2) -> float:
-    R = 6371000.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
-    a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
-    return 2 * R * math.asin(math.sqrt(a))
-
-def _in_circle(lat, lon, center, radius_m) -> tuple[bool, float]:
-    d = _haversine_m(lat, lon, center[0], center[1])
-    return (d <= float(radius_m)), d
-
-def _in_polygon(lat, lon, vertices) -> tuple[bool, float]:
-    # Ray-casting básico; devuelve además distancia mínima en m a los vértices
-    x, y = lon, lat
     inside = False
-    mind = float("inf")
-    n = len(vertices)
     for i in range(n):
-        lat_i, lon_i = float(vertices[i][0]), float(vertices[i][1])
-        lat_j, lon_j = float(vertices[(i - 1) % n][0]), float(vertices[(i - 1) % n][1])
-        # distancia mínima a vértices
-        mind = min(mind, _haversine_m(lat, lon, lat_i, lon_i))
-        xi, yi, xj, yj = lon_i, lat_i, lon_j, lat_j
-        intersect = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi)
-        if intersect:
-            inside = not inside
-    return inside, mind
+        lat_i, lon_i = poly_latlon[i]
+        lat_j, lon_j = poly_latlon[(i - 1) % n]
+        xi, yi = lon_i, lat_i
+        xj, yj = lon_j, lat_j
+        inter = ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi)
+        inside = not inside if inter else inside
+    return inside
 
-def _parse_shape(s: str) -> dict:
-    try:
-        d = json.loads(s)
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
+# ========== dataframes ==========
+def _geos_df() -> pd.DataFrame:
+    df = readTable(geoXlsx, geoCsv, GEO_COLS)
+    if df is None:
+        df = pd.DataFrame(columns=GEO_COLS)
+    df = df.copy()
+    if "activa" in df.columns:
+        df["activa"] = df["activa"].astype(str).str.lower().isin(["1","true","t","si","sí","yes","y"])
+    return df
 
-# ----------------- Estado y alertas -----------------
+def obtenerGeocercas() -> pd.DataFrame:
+    return _geos_df()
 
-def _load_estado() -> pd.DataFrame:
-    return _ensure(readTable(estadoXlsx, estadoCsv, ESTADO_COLS), ESTADO_COLS)
-
-def _set_estado(idg: str, aid: str, dentro: bool):
-    est = _load_estado()
-    m = (est["id_geocerca"].astype(str).eq(idg)) & (est["id_activo"].astype(str).eq(aid))
-    if m.any():
-        est.loc[m, ["dentro", "ts"]] = [bool(dentro), _now()]
+# acepta dict completo o firma histórica anterior
+def guardarGeocerca(*args, **kwargs) -> dict:
+    df = _geos_df()
+    if len(args) == 1 and isinstance(args[0], dict):
+        reg = args[0]
+        row = {k: reg.get(k, "") for k in GEO_COLS}
+        row["id_geocerca"] = str(row.get("id_geocerca") or f"G{int(datetime.now().timestamp())}")
+        row["nombre"] = str(row.get("nombre","")).strip()
+        row["tipo"] = str(row.get("tipo","polygon")).strip().lower()
+        row["activos"] = json.dumps(_parse_ids(row.get("activos","")), ensure_ascii=False)
+        sj = reg.get("shape_json","")
+        row["shape_json"] = json.dumps(sj, ensure_ascii=False) if not isinstance(sj, str) else sj
+        row["activa"] = bool(reg.get("activa", True))
+        row["creado_en"] = row.get("creado_en") or _now()
+        row["ultima_alerta_global"] = row.get("ultima_alerta_global","")
     else:
-        est = pd.concat([est, pd.DataFrame([{"id_geocerca": idg, "id_activo": aid, "dentro": bool(dentro), "ts": _now()}])], ignore_index=True)
-    writeTable(est, estadoXlsx, estadoCsv)
+        id_geocerca, nombre, tipo, cliente, contrato, activos, modo, emails, shape_json, activa, creado_por = args[:11]
+        row = {
+            "id_geocerca": str(id_geocerca).strip() or f"G{int(datetime.now().timestamp())}",
+            "nombre": str(nombre).strip(),
+            "tipo": str(tipo or "polygon").strip().lower(),
+            "cliente": str(cliente or "").strip(),
+            "contrato": str(contrato or "").strip(),
+            "activos": json.dumps(_parse_ids(activos), ensure_ascii=False),
+            "modo": str(modo or "").strip().lower(),
+            "emails": str(emails or "").strip(),
+            "shape_json": json.dumps(shape_json, ensure_ascii=False) if isinstance(shape_json, dict) else str(shape_json),
+            "activa": bool(activa),
+            "creado_por": str(creado_por or "").strip(),
+            "creado_en": _now(),
+            "ultima_alerta_global": "",
+        }
 
-def _prev_dentro(idg: str, aid: str) -> bool | None:
-    est = _load_estado()
-    m = (est["id_geocerca"].astype(str).eq(idg)) & (est["id_activo"].astype(str).eq(aid))
-    if m.any():
-        v = est.loc[m, "dentro"].iloc[0]
-        if isinstance(v, str):
-            return v.lower() in ("true", "1", "yes")
-        return bool(v)
-    return None
+    if not df.empty and row["id_geocerca"] in df["id_geocerca"].astype(str).tolist():
+        df.loc[df["id_geocerca"].astype(str) == row["id_geocerca"], list(row.keys())] = list(row.values())
+    else:
+        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    writeTable(df, geoXlsx, geoCsv)
+    return row
 
-def _record_alerta(reg: dict):
-    df = _ensure(readTable(alertXlsx, alertCsv, ALERTA_COLS), ALERTA_COLS)
-    df = pd.concat([df, pd.DataFrame([reg])], ignore_index=True)
-    writeTable(df, alertXlsx, alertCsv)
+def eliminarGeocerca(id_geocerca: str) -> None:
+    df = _geos_df()
+    df = df[df["id_geocerca"].astype(str) != str(id_geocerca)]
+    writeTable(df, geoXlsx, geoCsv)
 
-def cargarAlertas() -> pd.DataFrame:
-    return _ensure(readTable(alertXlsx, alertCsv, ALERTA_COLS), ALERTA_COLS)
+def _estado_df() -> pd.DataFrame:
+    df = readTable(estadoXlsx, estadoCsv, EST_COLS)
+    if df is None:
+        df = pd.DataFrame(columns=EST_COLS)
+    return df
 
-# ----------------- Evaluación principal -----------------
+def _alertas_df() -> pd.DataFrame:
+    df = readTable(alertXlsx, alertCsv, ALERTA_COLS)
+    if df is None:
+        df = pd.DataFrame(columns=ALERTA_COLS)
+    return df
 
-def evaluar_geocercas_y_alertar(intervalo_min: int = 2, enviar_correos: bool = True) -> list[dict]:
-    """
-    Evalúa geocercas activas contra las posiciones vigentes y, si hay transición
-    de estado, registra alerta y envía correo. Retorna lista de dicts con las alertas disparadas.
-    """
-    alertas_emitidas = []
+# ========== núcleo de evaluación ==========
 
-    df_geo = cargarGeocercas()
-    df_geo = df_geo[df_geo["activa"] == True]  # noqa: E712
+def _to_dt(s: str) -> datetime:
+    try:
+        return pd.to_datetime(s, errors="coerce").to_pydatetime()
+    except Exception:
+        return datetime.now()
 
-    if df_geo.empty:
-        return alertas_emitidas
+def evaluar_posiciones_y_generar_alertas(
+    enviar_correo: bool = True,
+    usuario: str | None = None,
+    destinatario: str | None = None,
+    ids_geocerca: list[str] | None = None,
+    disparar_fuera_actual: bool = True,
+    persistencia_min: int = 5,        # minutos fuera continuos antes de alertar
+    enfriamiento_min: int = 30,       # minutos mínimos entre correos por activo+geocerca
+) -> pd.DataFrame:
+    geos = _geos_df()
+    if geos.empty:
+        out = pd.DataFrame(columns=ALERTA_COLS)
+        writeTable(out, alertXlsx, alertCsv)
+        return out
 
-    # Posiciones frescas (ya integradas con contratos/clientes/estados reales)
-    df_pos = cargarPosiciones(sync_desde_activos=True)
-    if df_pos.empty:
-        return alertas_emitidas
+    if ids_geocerca:
+        ids_set = {str(x) for x in ids_geocerca}
+        geos = geos[geos["id_geocerca"].astype(str).isin(ids_set)]
+        if geos.empty:
+            return pd.DataFrame(columns=ALERTA_COLS)
 
-    df_pos["latitud"] = pd.to_numeric(df_pos["latitud"], errors="coerce")
-    df_pos["longitud"] = pd.to_numeric(df_pos["longitud"], errors="coerce")
-    df_pos = df_pos.dropna(subset=["latitud", "longitud"])
+    dfp = cargarPosiciones(sync_desde_activos=True)
+    if dfp is None or dfp.empty:
+        out = pd.DataFrame(columns=ALERTA_COLS)
+        writeTable(out, alertXlsx, alertCsv)
+        return out
 
-    for _, g in df_geo.iterrows():
-        idg   = str(g["id_geocerca"])
-        modo  = str(g.get("modo", "ambos")).lower()
-        emails = [e.strip() for e in str(g.get("emails", "")).split(",") if e.strip()]
-        shape = _parse_shape(str(g.get("shape_json", "{}")))
-        tipo  = str(g.get("tipo", ""))
+    dfp = dfp.copy()
+    dfp["id_activo"] = dfp["id_activo"].astype(str).str.strip()
+    dfp["latitud"]   = pd.to_numeric(dfp["latitud"], errors="coerce")
+    dfp["longitud"]  = pd.to_numeric(dfp["longitud"], errors="coerce")
+    dfp = dfp.dropna(subset=["latitud","longitud"])
 
-        # filtrar alcance: por cliente, contrato o lista de activos
-        sub = df_pos.copy()
-        if str(g.get("cliente", "")).strip():
-            sub = sub[sub["cliente"].astype(str).str.strip() == str(g["cliente"]).strip()]
-        if str(g.get("contrato", "")).strip():
-            sub = sub[sub["contrato"].astype(str).str.strip() == str(g["contrato"]).strip()]
-        if str(g.get("activos", "")).strip():
-            ids = [x.strip() for x in str(g["activos"]).split(",") if x.strip()]
-            sub = sub[sub["id_activo"].astype(str).isin(ids)]
+    dfA = cargarActivosDf()
+    if dfA is None:
+        dfA = pd.DataFrame(columns=["id","id_unico"])
+    dfA = dfA.copy()
+    dfA["id"]       = dfA.get("id","").astype(str).str.strip()
+    dfA["id_unico"] = dfA.get("id_unico","").astype(str).str.strip()
+    map_id_to_unico = dict(zip(dfA["id"], dfA["id_unico"]))
+    map_unico_to_id = dict(zip(dfA["id_unico"], dfA["id"]))
+
+    dfp["id_unico"] = dfp["id_activo"].map(map_id_to_unico).astype(str)
+
+    est_hist = _estado_df()     # histórico completo de estados
+    est_prev = est_hist.drop_duplicates(subset=["id_geocerca","id_activo","id_unico"], keep="last") \
+                        if not est_hist.empty else est_hist
+
+    hist_alertas = _alertas_df()
+
+    ahora = datetime.now()
+    nuevas_filas = []          # todas las filas de esta evaluación
+    filas_a_enviar = []        # solo las que sí mandan correo ahora
+
+    for _, g in geos.iterrows():
+        if not bool(g.get("activa", True)):
+            continue
+
+        pts = _parse_polygon(g.get("shape_json",""))
+        if len(pts) < 3:
+            continue
+
+        ids_tokens = _parse_ids(g.get("activos",""))
+        ids_unico  = set(ids_tokens)
+        ids_id     = {map_unico_to_id[x] for x in ids_unico if x in map_unico_to_id}
+
+        sub = dfp[(dfp["id_unico"].isin(ids_unico)) | (dfp["id_activo"].isin(ids_id))].copy()
         if sub.empty:
             continue
 
         for _, r in sub.iterrows():
-            aid = str(r["id_activo"])
-            lat, lon = float(r["latitud"]), float(r["longitud"])
+            lat = float(r["latitud"]); lon = float(r["longitud"])
+            dentro = _point_in_poly(lat, lon, pts)
 
-            if tipo == "circle":
-                dentro, dist = _in_circle(lat, lon, shape.get("center", [0, 0]), shape.get("radius_m", 0))
-            elif tipo == "polygon":
-                dentro, dist = _in_polygon(lat, lon, shape.get("vertices", []))
-            else:
-                continue
+            key = {
+                "id_geocerca": str(g["id_geocerca"]),
+                "id_activo":   str(r["id_activo"]),
+                "id_unico":    str(r.get("id_unico","")),
+            }
 
-            prev = _prev_dentro(idg, aid)
+            # registrar estado (para trazar persistencia)
+            est_row = dict(key, dentro=bool(dentro), ts=_now())
+            est_hist = pd.concat([est_hist, pd.DataFrame([est_row])], ignore_index=True)
+
+            # decidir si se genera evento y si se envía correo
             evento = None
-            if prev is None:
-                # primer muestreo: solo fija estado, sin alertar
-                _set_estado(idg, aid, dentro)
-                continue
-            if prev and not dentro and modo in ("salida", "ambos"):
-                evento = "SALIDA"
-            if (not prev) and dentro and modo in ("entrada", "ambos"):
-                evento = "ENTRADA"
+            motivo_silencio = ""
+
+            # transición previa
+            prevq = est_prev[
+                (est_prev["id_geocerca"].astype(str)==key["id_geocerca"]) &
+                (est_prev["id_activo"].astype(str)==key["id_activo"])
+            ]
+            prev_dentro = None if prevq.empty else bool(prevq.iloc[0]["dentro"])
+
+            if disparar_fuera_actual and not dentro:
+                evento = "SALIO"
+            elif prev_dentro is None and not dentro:
+                evento = "SALIO"
+            elif prev_dentro is not None and prev_dentro != dentro:
+                evento = "ENTRO" if dentro else "SALIO"
 
             if evento:
-                reg = {
+                # regla 1: persistencia mínima cuando está fuera
+                if evento == "SALIO" or not dentro:
+                    # último timestamp en que estuvo dentro, para calcular racha fuera
+                    hist_key = est_hist[
+                        (est_hist["id_geocerca"].astype(str)==key["id_geocerca"]) &
+                        (est_hist["id_activo"].astype(str)==key["id_activo"])
+                    ].sort_values("ts")
+                    # busca desde el final hacia atrás el último 'dentro=True'
+                    ult_dentro = None
+                    for _, rr in hist_key[::-1].iterrows():
+                        if bool(rr["dentro"]):
+                            ult_dentro = _to_dt(rr["ts"])
+                            break
+                    inicio_fuera = ult_dentro or ahora   # si nunca se vio dentro, toma ahora
+                    minutos_fuera = max(0, int((ahora - inicio_fuera).total_seconds() // 60))
+                    if minutos_fuera < persistencia_min:
+                        motivo_silencio = f"silenciado por persistencia<{persistencia_min}min"
+
+                # regla 2: enfriamiento por activo+geocerca
+                if not motivo_silencio:
+                    ult_envio = None
+                    if not hist_alertas.empty:
+                        env = hist_alertas[
+                            (hist_alertas["id_geocerca"].astype(str)==key["id_geocerca"]) &
+                            ((hist_alertas["id_unico"].astype(str)==key["id_unico"]) |
+                             (hist_alertas["id_activo"].astype(str)==key["id_activo"])) &
+                            (hist_alertas["enviado_email"].astype(str).str.startswith("enviada"))
+                        ]
+                        if not env.empty:
+                            ult_envio = _to_dt(env.sort_values("ts").iloc[-1]["ts"])
+                    if ult_envio and (ahora - ult_envio) < timedelta(minutes=enfriamiento_min):
+                        motivo_silencio = f"silenciado por enfriamiento<{enfriamiento_min}min"
+
+                fila = {
                     "ts": _now(),
-                    "id_geocerca": idg,
-                    "nombre": str(g.get("nombre", "")),
-                    "id_activo": aid,
-                    "cliente": str(r.get("cliente", "")),
-                    "contrato": str(r.get("contrato", "")),
-                    "evento": evento,
-                    "latitud": lat,
-                    "longitud": lon,
-                    "dist_m": round(float(dist), 2),
-                    "detalle": f"{evento} geocerca {idg} ({g.get('nombre','')})",
-                    "enviado_email": False
+                    "id_geocerca": key["id_geocerca"],
+                    "nombre": str(g.get("nombre","")),
+                    "id_activo": key["id_activo"],
+                    "id_unico":  key["id_unico"],
+                    "evento":    evento,
+                    "latitud":   lat,
+                    "longitud":  lon,
+                    "dist_m":    0.0,
+                    "detalle":   f"Activo {key['id_unico'] or key['id_activo']} {evento.lower()} de '{str(g.get('nombre',''))}'",
+                    "enviado_email": motivo_silencio,   # vacío si va para envío
                 }
-                # correo (opcional)
-                if enviar_correos and emails:
-                    asunto = f"[Gestemed] {evento} de geocerca: {g.get('nombre','')} | Activo {aid}"
-                    cuerpo = (
-                        f"Evento: {evento}\n"
-                        f"Geocerca: {g.get('nombre','')} ({idg})\n"
-                        f"Activo: {aid}\n"
-                        f"Cliente: {reg['cliente']}  Contrato: {reg['contrato']}\n"
-                        f"Coordenadas: {lat:.6f}, {lon:.6f}\n"
-                        f"Distancia al borde: {reg['dist_m']} m\n"
-                        f"Fecha/Hora: {reg['ts']}\n"
-                    )
-                    ok, _msg = enviar_email(asunto, cuerpo, emails)
-                    reg["enviado_email"] = bool(ok)
+                nuevas_filas.append(fila)
+                if motivo_silencio == "":
+                    filas_a_enviar.append(fila)
 
-                _record_alerta(reg)
-                alertas_emitidas.append(reg)
-                _set_estado(idg, aid, dentro)  # actualizar estado
+    # persiste estados y alertas
+    writeTable(est_hist, estadoXlsx, estadoCsv)
+    nuevo_df = pd.DataFrame(nuevas_filas) if nuevas_filas else pd.DataFrame(columns=ALERTA_COLS)
 
-            else:
-                # solo mantener estado si cambió sin alertar por modo
-                if prev != dentro:
-                    _set_estado(idg, aid, dentro)
+    # evitar duplicados exactos dentro de la misma evaluación
+    if not nuevo_df.empty:
+        nuevo_df = nuevo_df.drop_duplicates(subset=["id_geocerca","id_unico","id_activo","evento"], keep="last")
+        writeTable(pd.concat([hist_alertas, nuevo_df], ignore_index=True), alertXlsx, alertCsv)
 
-    return alertas_emitidas
+    # envío consolidado
+    if enviar_correo and enviar_email and filas_a_enviar:
+        dest = destinatario or (_email_de_usuario(usuario) if usuario else None)
+        if dest:
+            lineas = [f"- {a['ts']} · {a['nombre']} · {a['id_unico'] or a['id_activo']} · {a['evento']}"
+                      for a in filas_a_enviar]
+            try:
+                enviar_email(
+                    "Gestemed · Alertas de geocercas",
+                    "Hola,\n\nSe generaron las siguientes alertas de movimiento:\n\n"
+                    + "\n".join(lineas) + "\n\nMensaje automático.",
+                    dest
+                )
+                # marca como enviadas solo las filas realmente enviadas
+                enviados_idx = nuevo_df[nuevo_df["enviado_email"]==""].index
+                nuevo_df.loc[enviados_idx, "enviado_email"] = f"enviada {_now()}"
+                writeTable(pd.concat([hist_alertas, nuevo_df], ignore_index=True), alertXlsx, alertCsv)
+            except Exception:
+                pass
 
-def catalogos():
-    """Retorna los catálogos de clientes y contratos."""
-    # Suponiendo que estos datos provienen de una fuente local o de una base de datos.
-    clientes = ["Cliente 1", "Cliente 2", "Cliente 3"]  # Estos valores deben ser cargados dinámicamente
-    contratos = ["Contrato 1", "Contrato 2", "Contrato 3"]  # Lo mismo aquí
-    
-    return {"clientes": clientes, "contratos": contratos}
-
-
-def _shape_from_draw(res):
-    """Extrae la geometría del último dibujo hecho en el mapa (círculo o polígono)."""
-    if not res:
-        return None
-
-    # Se toman las últimas figuras dibujadas por el usuario
-    obj = res.get("last_active_drawing") or res.get("last_object") or res.get("last_circle") or res.get("last_polygon")
-    
-    if not obj:
-        return None
-
-    gj = obj if isinstance(obj, dict) else {}
-    gtype = gj.get("type") or (gj.get("geometry", {}) or {}).get("type")
-
-    if gtype == "Feature":  # a veces viene como Feature
-        geom = gj.get("geometry", {})
-        gtype = geom.get("type")
-        coords = geom.get("coordinates")
-    else:
-        geom = gj.get("geometry", gj)
-        coords = geom.get("coordinates")
-
-    if str(gtype).lower() == "polygon":
-        # Coordina el polígono: [[lon, lat], [lon, lat], ...]
-        verts = [[c[1], c[0]] for c in coords[0]]  # Convertimos a [lat, lon]
-        return {"type": "polygon", "vertices": verts}
-
-    if str(gtype).lower() == "circle":
-        # Para círculos, obtenemos el centro y el radio
-        props = gj.get("properties", {})
-        center = props.get("center") or props.get("circle_center") or [gj.get("lat", 0), gj.get("lng", 0)]
-        radius = props.get("radius") or props.get("circle_radius") or 0
-        return {"type": "circle", "center": [float(center[0]), float(center[1])], "radius_m": float(radius)}
-
-    return None
-
+    return nuevo_df

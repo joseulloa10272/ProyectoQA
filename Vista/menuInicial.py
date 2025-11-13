@@ -22,7 +22,7 @@ def app(usuario):
     with opciones:
         option = st.radio(
             label="Seleccione la función que desea realizar:",
-            options=("Activos", "Contratos", "Refacciones", "GPS", "RFID", "Geocercas", "Mantenimientos", "Reportes"),
+            options=("Activos", "Contratos", "Refacciones", "Seguimiento GPS", "Geocercas", "Mantenimientos", "Reportes"),
         )
         st.markdown("---")
 

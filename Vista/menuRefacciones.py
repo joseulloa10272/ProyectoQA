@@ -1,238 +1,313 @@
-import streamlit as st, pandas as pd, sys, os
+# Vista/menuRefacciones.py
+import os, sys
+import streamlit as st
+import pandas as pd
+
+# rutas de import
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Validación de usuario / rol
-try:
-    from Validaciones.usuarioValidaciones import existeUsuario as _exists_user
-except Exception:
-    def _exists_user(u): return True
-try:
-    from Validaciones.usuarioValidaciones import obtenerTipoUsuario as _get_role
-except Exception:
-    def _get_role(u): return "Administrador"
-
-# Activos (para seleccionar el equipo al que se asigna la refacción)
-try:
-    from Persistencia.activosPersistencia import cargarActivos
-except Exception:
-    cargarActivos = None
-
-from Controlador.refaccionesController import (
-    crearRefaccion, moverStock, setUmbral, refaccionesDeActivo,
-    generarAlertas,
-)
-
-from Persistencia.refaccionesPersistencia import (
-    cargarRefacciones, refaccionesBajoUmbral, obtenerStock
-)
+# backend de alertas (automático)
 from Persistencia.alertasRefaccionesPersistencia import (
-    generarAlertasBajoUmbral, cargarAlertas, cambiarEstadoAlerta
+    evaluar_y_enviar_alertas,
+    cargar_buzon_alertas,
 )
 
-ROLES_PERMITIDOS = {"Administrador","Gerente","Encargado","Almacen"}
+# backend de refacciones
+from Persistencia.refaccionesPersistencia import (
+    refacciones_de_activo,
+    agregar_refaccion,
+    registrar_movimiento,
+    actualizar_umbral,
+)
 
-def _check_acceso(usuario):
-    if not _exists_user(usuario):
-        st.error("Usuario no válido."); st.stop()
-    rol = (_get_role(usuario) or "").strip().title()
-    if rol not in ROLES_PERMITIDOS:
-        st.error("Acceso restringido para su rol."); st.stop()
-    return rol
+# activos
+from Persistencia.activosPersistencia import cargarActivosDf
 
-def _lista_activos():
-    if cargarActivos:
-        return cargarActivos()
-    # Fallback por si no existe la función (intenta leer columnas mínimas)
-    st.warning("No encontré 'cargarActivos' en Persistencia. Muestra solo controles de refacciones.")
-    return pd.DataFrame(columns=["id","modelo","serie","cliente"])
 
-def mostrar_buzon_notificaciones():
-    from Persistencia.alertasRefaccionesPersistencia import cargarAlertas, cambiarEstadoAlerta
-    import streamlit as st
-    df = cargarAlertas()
+# ================== Utilidades ==================
+def _df_activos():
+    df = cargarActivosDf()
     if df.empty:
-        st.info("Sin notificaciones nuevas.")
+        return df
+    # etiqueta para selectores: conserva el id_unico
+    df["label"] = df.apply(
+        lambda r: f"{str(r.get('id_unico','')).strip()} - {str(r.get('modelo','')).strip()}"
+                  + (f" ({str(r.get('cliente','')).strip()})" if str(r.get('cliente','')).strip() else ""),
+        axis=1
+    )
+    # nombre para dashboard: SOLO modelo (+ cliente), sin ids
+    df["nombre"] = df.apply(
+        lambda r: (str(r.get('modelo','')).strip() or "Activo sin modelo")
+                  + (f" ({str(r.get('cliente','')).strip()})" if str(r.get('cliente','')).strip() else ""),
+        axis=1
+    )
+    df["id"] = df["id"].astype(str)
+    df["id_unico"] = df["id_unico"].astype(str)
+    return df[["id","id_unico","label","nombre"]]
+
+
+def _pick_activo(key_suffix: str):
+    """Selector de activo con clave única por pestaña."""
+    dfA = _df_activos()
+    opciones = dfA["label"].tolist()
+    if not opciones:
+        st.info("No hay activos registrados.")
+        return None, None, None
+    etiqueta = st.selectbox(
+        "Seleccione un activo",
+        opciones,
+        key=f"rf_sel_activo_{key_suffix}",
+    )
+    fila = dfA[dfA["label"] == etiqueta].iloc[0]
+    return (fila["id"], fila["id_unico"], etiqueta)
+
+
+def _pick_refaccion(id_activo, key_suffix: str):
+    """Selector de refacción con clave única por pestaña."""
+    df = refacciones_de_activo(id_activo)
+    if df.empty:
+        return None, None
+    df = df.copy()
+    df["etq"] = "[" + df["id_ref"].astype(str) + "] " + df["nombre"].astype(str)
+    etq = st.selectbox(
+        "Seleccione refacción",
+        df["etq"].tolist(),
+        key=f"rf_sel_ref_{key_suffix}",
+    )
+    fila = df[df["etq"] == etq].iloc[0]
+    return (fila["id_ref"], fila)
+
+
+# ================== Pestaña: Catálogo ==================
+def _tab_catalogo():
+    st.subheader("Asignar refacciones a un ACTIVO específico")
+
+    id_activo, id_unico, etiqueta = _pick_activo("cat")
+    if not id_activo:
+        st.info("Primero seleccione un activo del catálogo.")
         return
 
-    nuevas = df.loc[df["estado"] == "nuevo"]
-    vistas = df.loc[df["estado"] == "visto"]
+    st.caption(f"Activo seleccionado: {etiqueta}")
 
-    total = len(nuevas)
-    st.subheader(f"🔔 Buzón de notificaciones ({total} nuevas)")
-    if total == 0:
-        st.success("No hay alertas nuevas.")
+    df_ref = refacciones_de_activo(id_activo)
+    if not df_ref.empty:
+        st.dataframe(
+            df_ref[["id_ref","nombre","modeloEquipo","stock","umbral","actualizado_en"]],
+            use_container_width=True,
+            hide_index=True
+        )
     else:
-        for _, r in nuevas.iterrows():
-            with st.expander(f"⚠️ Refacción {r['nombre']} | Stock={r['stock']} / Umbral={r['umbral']}"):
-                st.write(f"**Activo:** {r['id_activo']}")
-                st.write(f"**Fecha:** {r['generada_en']}")
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("Marcar como vista", key=f"vista_{r['id_alerta']}"):
-                        cambiarEstadoAlerta(r['id_alerta'], "visto")
-                        st.rerun()
-                with c2:
-                    if st.button("Marcar como atendida", key=f"atendida_{r['id_alerta']}"):
-                        cambiarEstadoAlerta(r['id_alerta'], "atendido")
-                        st.rerun()
+        st.info("Este activo aún no tiene refacciones registradas.")
 
-    if not vistas.empty:
-        st.divider()
-        st.markdown("### 🔎 Alertas vistas")
-        for _, r in vistas.iterrows():
-            st.text(f"{r['nombre']} — Stock {r['stock']} / Umbral {r['umbral']} (Activo {r['id_activo']})")
+    st.markdown("---")
+    nombre   = st.text_input("Nombre de refacción", key="rf_n_cat")
+    modelo   = st.text_input("Modelo de equipo (opcional)", key="rf_m_cat")
+    stock_i  = st.number_input("Stock inicial", min_value=0, step=1, value=0, key="rf_si_cat")
+    umbral   = st.number_input("Umbral", min_value=0, step=1, value=0, key="rf_um_cat")
 
-def app(usuario=""):
-    st.title("Refacciones y Alertas")
-    _check_acceso(usuario if usuario else st.session_state.get("usuario",""))
+    if st.button("Agregar refacción", type="primary", key="rf_add_btn_cat"):
+        try:
+            agregar_refaccion(id_activo, id_unico, nombre, modelo, stock_i, umbral)
+            # evaluar alertas de inmediato (por si queda bajo umbral)
+            evaluar_y_enviar_alertas(st.session_state.get("usuario",""))
+            st.success("Refacción registrada.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"No se registró la refacción: {e}")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Catálogo", "Movimientos", "Umbrales & Alertas", "Dashboard"])
 
-    # ------------------- TAB 1: Catálogo -------------------
-    with tab1:
-        st.subheader("Asignar refacciones a un ACTIVO específico")
-        df_act = _lista_activos()
+# ================== Pestaña: Movimientos ==================
+def _tab_movimientos():
+    st.subheader("Movimientos de stock")
 
-        # Convertir lista a DataFrame si es necesario
-        if isinstance(df_act, list):
-            import pandas as pd
-            df_act = pd.DataFrame(df_act)
+    id_activo, id_unico, etiqueta = _pick_activo("mov")
+    if not id_activo:
+        st.info("Seleccione un activo para ver y registrar movimientos.")
+        return
 
-        # Si sigue vacío, mostrar mensaje
-        if df_act is None or df_act.empty:
-            st.info("No hay activos registrados.")
-        else:
-            opciones_act = {f"[{r['id']}] {r.get('modelo','')} - {r.get('serie','')}": r["id"] for _, r in df_act.iterrows()}
-            sel_act = st.selectbox("Seleccione activo", list(opciones_act.keys()))
-            id_activo = opciones_act[sel_act]
-            st.caption(f"Activo seleccionado: {sel_act}")
+    df_ref = refacciones_de_activo(id_activo)
+    st.dataframe(
+        df_ref[["id_ref","nombre","modeloEquipo","stock","umbral"]],
+        use_container_width=True,
+        hide_index=True
+    )
+    if df_ref.empty:
+        return
 
-            st.markdown("### Refacciones del activo")
-            st.dataframe(refaccionesDeActivo(id_activo), use_container_width=True)
+    id_ref, fila = _pick_refaccion(id_activo, "mov")
+    if id_ref is None:
+        st.info("Este activo no tiene refacciones cargadas.")
+        return
 
-            st.markdown("**Nueva refacción para este activo**")
-            col1, col2 = st.columns(2)
-            with col1:
-                nombre = st.text_input("Nombre refacción")
-                modelo = st.text_input("Modelo de equipo (opcional)")
-                umbral = st.number_input("Umbral", min_value=0, step=1, value=0)
-            with col2:
-                stock_ini = st.number_input("Stock inicial", min_value=0, step=1, value=0)
-                ubic = st.text_input("Ubicación")
-            if st.button("Agregar refacción", type="primary"):
-                if not nombre.strip():
-                    st.error("Nombre es obligatorio.")
-                else:
-                    nuevo = crearRefaccion(id_activo, nombre, modelo, stock_ini, umbral, ubic)
-                    st.success(f"Refacción creada y vinculada al activo {id_activo} (ID refacción {nuevo['id']}).")
-                    st.rerun()
+    st.caption(f"Stock actual de **{fila['nombre']}**: {int(fila['stock'])}  |  Umbral: {int(fila['umbral'])}")
+    tipo = st.radio("Tipo de movimiento", options=("entrada","salida"), horizontal=True, key="rf_mv_tipo_mov")
+    cant = st.number_input("Cantidad", min_value=1, step=1, value=1, key="rf_mv_cant_mov")
+    motivo = st.text_input("Motivo", key="rf_mv_mot_mov")
 
-    # ------------------- TAB 2: Movimientos -------------------
-    with tab2:
-        st.subheader("Movimientos de stock")
-        df_ref = cargarRefacciones()
-        if df_ref.empty:
-            st.info("No hay refacciones registradas.")
-        else:
-            # 1️⃣ Seleccionar activo
-            activos = df_ref["id_activo"].dropna().unique().astype(str)
-            activo_sel = st.selectbox("Seleccione un activo", activos, format_func=lambda x: f"Activo {x}")
-            df_activo = df_ref[df_ref["id_activo"].astype(str) == str(activo_sel)]
+    if st.button("Registrar movimiento", type="primary", key="rf_mv_btn_mov"):
+        try:
+            registrar_movimiento(id_activo, id_ref, tipo, cant, motivo)
+            # evaluación automática tras el movimiento
+            evaluar_y_enviar_alertas(st.session_state.get("usuario",""))
+            st.success("Movimiento registrado.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"No se registró el movimiento: {e}")
 
-            # 2️⃣ Mostrar refacciones del activo
-            st.dataframe(df_activo[["id","nombre","modeloEquipo","stock","umbral","ubicacion"]], use_container_width=True)
 
-            # 3️⃣ Elegir refacción
-            ref_opts = {f"[{r['id']}] {r['nombre']}": r["id"] for _, r in df_activo.iterrows()}
-            ref_sel = st.selectbox("Refacción", list(ref_opts.keys()))
-            id_ref = ref_opts[ref_sel]
+# ================== Pestaña: Umbrales & Alertas ==================
+def _tab_umbral_alertas(usuario: str):
+    # evaluación + envío automático al entrar/rerun
+    evaluar_y_enviar_alertas(st.session_state.get("usuario",""))
 
-            stock_actual = obtenerStock(id_ref)
-            st.caption(f"Stock actual: **{stock_actual}**")
+    st.subheader("Umbrales y alertas")
 
-            tipo = st.radio("Tipo de movimiento", ["entrada","salida"], horizontal=True)
-            cant = st.number_input("Cantidad", min_value=1, step=1, value=1)
-            motivo = st.text_input("Motivo")
-            usuario_mv = st.text_input("Usuario que registra", value=usuario)
+    # gestor de umbral por activo/refacción (sin cambios)
+    id_activo, id_unico, etiqueta = _pick_activo("um")
+    if not id_activo:
+        st.info("Seleccione un activo para gestionar umbrales.")
+        return
+    df_ref = refacciones_de_activo(id_activo)
+    if df_ref.empty:
+        st.info("Este activo no tiene refacciones aún.")
+        return
 
-            # Validación
-            if tipo == "salida" and cant > stock_actual:
-                st.error(f"No se puede retirar {cant} unidades (stock actual {stock_actual}).")
-                disabled = True
+    id_ref, fila = _pick_refaccion(id_activo, "um")
+    if id_ref is None:
+        return
+    nuevo = st.number_input("Nuevo umbral", min_value=0, step=1, value=int(fila["umbral"]), key="rf_new_um_um")
+    if st.button("Actualizar umbral", key="rf_upd_um_um"):
+        try:
+            actualizar_umbral(id_activo, id_ref, nuevo)
+            evaluar_y_enviar_alertas(st.session_state.get("usuario",""))  # recalcula buzón tras el cambio
+            st.success("Umbral actualizado.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"No se actualizó el umbral: {e}")
+
+    st.markdown("---")
+    st.subheader("Buzón de notificaciones")
+
+    # filtros del buzón
+    bz_all = cargar_buzon_alertas()
+    act_opts = ["Todos"] + sorted(bz_all["id_unico"].astype(str).unique().tolist()) if not bz_all.empty else ["Todos"]
+    c1, c2 = st.columns([1,1])
+    with c1:
+        f_act = st.selectbox("Filtrar por activo", act_opts, key="rf_bz_act")
+    with c2:
+        f_est = st.selectbox("Estado", ["Todos","Pendientes","Enviadas"], key="rf_bz_est")
+
+    bz = cargar_buzon_alertas(
+        f_id_unico=None if f_act == "Todos" else f_act,
+        f_estado=None if f_est == "Todos" else f_est
+    )
+
+    if bz is None or bz.empty:
+        st.info("Sin alertas activas en este momento.")
+    else:
+        cols = [c for c in ["id_unico","refaccion","stock","umbral","enviado_email","ts"] if c in bz.columns]
+        st.dataframe(bz[cols], use_container_width=True, hide_index=True, height=280)
+
+# ================== Pestaña: Dashboard ==================
+def _tab_dashboard():
+    st.subheader("Dashboard — Refacciones y Alertas")
+
+    try:
+        import altair as alt
+        _has_alt = True
+    except Exception:
+        _has_alt = False
+
+    dfA = _df_activos()
+    resumen = []
+    for _, a in dfA.iterrows():
+        df_r = refacciones_de_activo(a["id"])
+        if df_r.empty:
+            continue
+        total = len(df_r)
+        bajos = int((df_r["stock"].astype(int) <= df_r["umbral"].astype(int)).sum())
+        resumen.append({
+            "activo_id": a["id"],
+            "activo_nombre": a["nombre"],     # sin ids
+            "refacciones": total,
+            "bajo_umbral": bajos
+        })
+
+    if not resumen:
+        st.info("Sin datos para graficar")
+        return
+
+    df_sum = pd.DataFrame(resumen)
+
+    c1, c2 = st.columns(2)
+
+    if _has_alt:
+        # Barras: refacciones registradas por activo
+        chart_bar = (
+            alt.Chart(df_sum)
+            .mark_bar()
+            .encode(
+                x=alt.X("activo_nombre:N", sort="-y", title="Activo"),
+                y=alt.Y("refacciones:Q", title="Refacciones registradas"),
+                tooltip=["activo_nombre","refacciones","bajo_umbral"]
+            )
+            .properties(height=320)
+        )
+        with c1:
+            st.altair_chart(chart_bar, use_container_width=True)
+
+        # Donut: distribución de alertas por activo
+        df_pie = df_sum[df_sum["bajo_umbral"] > 0][["activo_nombre","bajo_umbral"]]
+        with c2:
+            if df_pie.empty:
+                st.info("Sin alertas bajo umbral")
             else:
-                disabled = False
+                chart_pie = (
+                    alt.Chart(df_pie)
+                    .mark_arc(innerRadius=60)
+                    .encode(
+                        theta=alt.Theta("bajo_umbral:Q", title="Alertas"),
+                        color=alt.Color("activo_nombre:N", title="Activo"),
+                        tooltip=["activo_nombre","bajo_umbral"]
+                    )
+                    .properties(height=320)
+                )
+                st.altair_chart(chart_pie, use_container_width=True)
+    else:
+        with c1:
+            st.bar_chart(df_sum.set_index("activo_nombre")["refacciones"])
+        with c2:
+            st.bar_chart(df_sum.set_index("activo_nombre")["bajo_umbral"])
 
-            # 4️⃣ Registrar movimiento
-            if st.button("Registrar movimiento", type="primary", disabled=disabled):
-                mv = moverStock(id_ref, tipo, cant, motivo, usuario_mv)
-                generarAlertasBajoUmbral()  # genera nuevas alertas si aplica
-                low = refaccionesBajoUmbral()
-                if not low.empty and str(id_ref) in list(low["id"].astype(str)):
-                    st.warning("⚠️ Esta refacción alcanzó o está por debajo del umbral.")
-                    st.toast("🔔 Alerta: refacción con stock igual o menor al umbral.")
-                st.success(f"Movimiento {mv['id_mov']} registrado correctamente.")
-                st.toast(f"✅ Movimiento de {tipo} ({cant}) aplicado a {ref_sel}")
-                st.rerun()
+    st.markdown("— Detalle de refacciones bajo umbral")
+    filas = []
+    for _, a in dfA.iterrows():
+        df_r = refacciones_de_activo(a["id"])
+        if df_r.empty:
+            continue
+        bajo = df_r[df_r["stock"].astype(int) <= df_r["umbral"].astype(int)]
+        if not bajo.empty:
+            b = bajo.copy()
+            b.insert(0, "activo", a["nombre"])  # nombre sin ids
+            filas.append(b[["activo","id_ref","nombre","stock","umbral"]])
+    if filas:
+        st.dataframe(pd.concat(filas, ignore_index=True),
+                     use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay refacciones bajo umbral")
 
-    # ------------------- TAB 3: Umbrales & Alertas -------------------
-    with tab3:
-        st.subheader("Umbrales y alertas")
 
-        df = cargarRefacciones()
-        if df.empty:
-            st.info("No hay refacciones registradas.")
-        else:
-            activos = df["id_activo"].dropna().unique().astype(str)
-            act_sel = st.selectbox("Seleccione un activo", activos)
-            df_act = df[df["id_activo"].astype(str) == str(act_sel)]
+# ================== Entrada principal ==================
+def app(usuario: str):
+    st.subheader("Refacciones y Alertas")
+    st.session_state["usuario"] = usuario  # para resolver correo en alertas automáticas
 
-            ref_opts = {f"[{r['id']}] {r['nombre']}": r["id"] for _, r in df_act.iterrows()}
-            ref_sel = st.selectbox("Seleccione refacción", list(ref_opts.keys()))
-            id_ref = ref_opts[ref_sel]
-
-            umbral_actual = int(df_act[df_act["id"].astype(str) == str(id_ref)]["umbral"].iloc[0])
-            n_umbral = st.number_input("Nuevo umbral", min_value=0, step=1, value=umbral_actual)
-            if st.button("Actualizar umbral"):
-                setUmbral(id_ref, n_umbral)
-                st.success("Umbral actualizado correctamente.")
-                generarAlertas()  # Genera alertas si aplica
-                st.toast("🔔 Se actualizó el umbral y se verificaron alertas.")
-                st.rerun()
-
-        st.divider()
-        st.markdown("### 🔔 Buzón de notificaciones")
-        mostrar_buzon_notificaciones()
-
-    # ------------------- TAB 4: Dashboard -------------------
-    with tab4:
-        st.subheader("Dashboard — Refacciones y Alertas")
-
-        df = cargarRefacciones()
-        df_alert = cargarAlertas()
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("**📦 Refacciones por Activo**")
-            if not df.empty:
-                ref_count = df.groupby("id_activo").size().reset_index(name="Cantidad")
-                st.bar_chart(ref_count.set_index("id_activo"))
-            else:
-                st.info("No hay refacciones registradas.")
-
-        with col2:
-            st.markdown("**🔔 Alertas por Estado**")
-            if not df_alert.empty:
-                state_count = df_alert.groupby("estado").size().reset_index(name="Cantidad")
-                st.bar_chart(state_count.set_index("estado"))
-            else:
-                st.info("No hay alertas registradas.")
-
-        st.divider()
-        st.markdown("**📋 Detalle de Refacciones bajo umbral**")
-        low = refaccionesBajoUmbral()
-        if low.empty:
-            st.success("Todo en orden, sin refacciones bajo umbral. 🎉")
-        else:
-            st.warning(f"{len(low)} refacciones bajo umbral.")
-            st.dataframe(low[["id","id_activo","nombre","stock","umbral"]], use_container_width=True)
+    tabs = st.tabs(["Catálogo","Movimientos","Umbrales & Alertas","Dashboard"])
+    with tabs[0]:
+        _tab_catalogo()
+    with tabs[1]:
+        _tab_movimientos()
+    with tabs[2]:
+        _tab_umbral_alertas(usuario)
+    with tabs[3]:
+        _tab_dashboard()

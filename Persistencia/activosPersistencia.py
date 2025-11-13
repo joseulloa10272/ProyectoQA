@@ -1,5 +1,6 @@
 # Persistencia/activosPersistencia.py
-import io
+from __future__ import annotations
+import os, io, json
 from typing import List, Dict, Tuple
 from datetime import datetime
 import pandas as pd
@@ -315,20 +316,27 @@ def importarActivosMasivoDesdeArchivo(fileObj, filename: str, usuario: str) -> T
     guardarActivosDf(df_out)
     return True, rep
 
-# ===== Utilidad para menús =====
+# --- reemplaza SOLO esta función en Persistencia/activosPersistencia.py ---
 def cargarActivosIdNombre() -> List[str]:
     df = cargarActivosDf()
     if df is None or df.empty:
         return []
     df = df.dropna(subset=["id_unico", "modelo"])
-    etiquetas = []
-    for _, r in df.iterrows():
-        idu = _norm_str(r.get("id_unico", ""))
-        mod = _norm_str(r.get("modelo", ""))
-        cli = _norm_str(r.get("cliente", ""))
-        etq = f"{idu} - {mod}" + (f" ({cli})" if cli else "")
-        etiquetas.append(etq)
-    return etiquetas
+    etiquetas = (
+        df["id_unico"].astype(str).str.strip()
+        + " - " + df["modelo"].astype(str).str.strip()
+        + " (" + df["cliente"].astype(str).fillna("").str.strip() + ")"
+    ).tolist()
+    vistos, out = set(), []
+    for e in etiquetas:
+        if e not in vistos:
+            out.append(e)
+            vistos.add(e)
+    return out
+
+# --- opcional: alias de conveniencia si alguna vista espera lista de dicts ---
+def cargarActivos() -> List[Dict]:
+    return dfToListOfDicts(cargarActivosDf())
 
 # ===== Historial de movimientos =====
 def cargarHistorialMovimientos(id_activo: str, fecha_inicio: str = None, fecha_fin: str = None) -> pd.DataFrame:

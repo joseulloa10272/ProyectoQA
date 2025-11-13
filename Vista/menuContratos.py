@@ -2,6 +2,7 @@
 import streamlit as st
 import sys, os, json, inspect
 import pandas as pd
+from datetime import datetime
 
 # Rutas de import estables
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -72,6 +73,11 @@ except Exception:
 
 
 # ========================= Utilitarios locales =========================
+def _parse_fecha_yyyy_mm_dd(s: str):
+    try:
+        return datetime.strptime(s.strip(), "%Y-%m-%d").date()
+    except Exception:
+        return None
 def _estado_calc(fi: str, ff: str) -> str:
     hoy = pd.Timestamp.today().normalize()
     ini = pd.to_datetime(fi, errors="coerce")
@@ -302,7 +308,7 @@ def app(usuario: str):
         tipoUsuario = obtenerTipoUsuario(usuario)
         if tipoUsuario not in ["Administrador", "Gerente"]:
             st.warning("No tiene permiso para registrar contratos.")
-            return
+            st.stop()
 
         st.subheader("Registrar Contrato")
 
@@ -311,10 +317,10 @@ def app(usuario: str):
         fechaFin     = st.text_input("Ingrese la fecha de finalización (YYYY-MM-DD):", key="ct_ff")
         condiciones  = st.text_area("Ingrese las condiciones:", key="ct_cond")
 
-        # Selección de activos EXACTAMENTE como la primera versión
+        # Activos EXACTAMENTE como los muestras en tu UI
         activosEtiquetas = st.multiselect(
             "Activos a asociar",
-            options=cargarActivosIdNombre(),   # "ID - Modelo (Cliente)"
+            options=cargarActivosIdNombre(),     # "ID - Modelo (Cliente)"
             max_selections=5,
             key="ct_activos_sel",
         )
@@ -324,17 +330,49 @@ def app(usuario: str):
             min_value=1, step=1, value=30, key="ct_umbral"
         )
 
+        # Botón SIEMPRE habilitado; la validación ocurre aquí dentro
         if st.button("Registrar Contrato", key="ct_btn_guardar"):
-            if not cliente.strip() or not fechaInicio.strip() or not fechaFin.strip() or not condiciones.strip():
-                st.warning("Debe ingresar todos los datos.")
-                return
+            errores = []
+
+            c  = cliente.strip()
+            fi = fechaInicio.strip()
+            ff = fechaFin.strip()
+            co = condiciones.strip()
+
+            if not c:
+                errores.append("El nombre del cliente es obligatorio.")
+            if not fi:
+                errores.append("La fecha de inicio es obligatoria.")
+            if not ff:
+                errores.append("La fecha de finalización es obligatoria.")
+            if not co:
+                errores.append("Las condiciones son obligatorias.")
+            if not activosEtiquetas:
+                errores.append("Debe seleccionar al menos un activo asociado.")
+
+            f1 = _parse_fecha_yyyy_mm_dd(fi) if fi else None
+            f2 = _parse_fecha_yyyy_mm_dd(ff) if ff else None
+            if (fi and not f1) or (ff and not f2):
+                errores.append("El formato de las fechas debe ser YYYY-MM-DD.")
+            elif f1 and f2 and f1 > f2:
+                errores.append("La fecha de inicio debe ser anterior o igual a la fecha de finalización.")
+
+            if int(diasNotificar) <= 0:
+                errores.append("Los días de anticipación deben ser mayores que cero.")
+
+            if errores:
+                for e in errores:
+                    st.error(e)
+                st.stop()
+
+            # Si todo está correcto, se registra
             try:
                 nuevo = agregarContratos(
-                    cliente=cliente.strip(),
-                    fechaInicio=fechaInicio.strip(),
-                    fechaFin=fechaFin.strip(),
-                    condiciones=condiciones.strip(),
-                    activosAsociados=activosEtiquetas,  # se envían las etiquetas tal cual
+                    cliente=c,
+                    fechaInicio=fi,
+                    fechaFin=ff,
+                    condiciones=co,
+                    activosAsociados=activosEtiquetas,   # etiquetas tal cual
                     diasNotificar=int(diasNotificar),
                 )
                 if _ALERTAS_OK and callable(generarAlertasVencimiento_en_caliente):

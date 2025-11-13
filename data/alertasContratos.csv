@@ -1,0 +1,2 @@
+id_contrato,cliente,fechaFin,dias_restantes,umbral,estado,ts_alerta,notificado
+1,Manuel,2025-12-12,30,30,Por vencer,2025-11-12 22:15:37,enviada 2025-11-12 22:15

@@ -1,1 +1,2 @@
 id_geocerca,nombre,tipo,cliente,contrato,activos,modo,emails,shape_json,activa,creado_por,creado_en,ultima_alerta_global
+G428193,Geocercas activos,polygon,,,"[""7"", ""3"", ""5"", ""11"", ""6"", ""10"", ""9"", ""1"", ""2"", ""8"", ""4""]",auto,,"{""type"": ""Polygon"", ""coordinates"": [[[-85.204468, 10.682201], [-83.435669, 10.547221], [-84.622192, 9.18887], [-85.204468, 10.682201]]]}",True,Eddye,2025-11-12 22:15:03,

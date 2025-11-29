@@ -259,7 +259,7 @@ def app(usuario):
 
         f_ini_str = f_ini.strftime("%Y-%m-%d") if f_ini else None
         f_fin_str = f_fin.strftime("%Y-%m-%d") if f_fin else None
-
+        
         try:
             dfh = cargarHistorialMovimientos(id_unico, f_ini_str, f_fin_str)
         except Exception as e:
@@ -270,10 +270,37 @@ def app(usuario):
             st.info("Sin registros de movimientos para los filtros indicados.")
             return
 
+        # === Retención visual y aplicada de 90 días ===
+        # Se fuerza el límite temporal independientemente del rango elegido
+        limite_90 = pd.Timestamp.today().normalize() - pd.Timedelta(days=90)
+        dfh["fecha"] = pd.to_datetime(dfh["fecha"], errors="coerce")
+
+        total_previos = len(dfh)
+        dfh = dfh[dfh["fecha"] >= limite_90]
+        ocultos = max(total_previos - len(dfh), 0)
+
+        if dfh.empty:
+            st.info(f"No hay eventos dentro de los últimos 90 días a partir de {limite_90.date()}.")
+            return
+
         # orden cronológico descendente
         dfh = dfh.sort_values("fecha", ascending=False)
+
+        # tabla
         st.dataframe(dfh, use_container_width=True, hide_index=True, key="act_hist_grid")
 
-        # descarga opcional
+        # aviso de retención visible en la interfaz
+        st.caption(
+            f"Retención mínima aplicada: solo se muestran eventos desde {limite_90.date()} "
+            f"({len(dfh)} registros visibles, {ocultos} anteriores ocultos en la interfaz)."
+        )
+
+        # descarga opcional del subconjunto retenido
         csv = dfh.to_csv(index=False).encode("utf-8")
-        st.download_button("Descargar CSV", data=csv, file_name=f"historial_{id_unico}.csv", mime="text/csv", key="act_hist_dl")
+        st.download_button(
+            "Descargar CSV",
+            data=csv,
+            file_name=f"historial_{id_unico}.csv",
+            mime="text/csv",
+            key="act_hist_dl"
+        )

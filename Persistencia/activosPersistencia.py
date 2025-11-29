@@ -339,25 +339,72 @@ def cargarActivos() -> List[Dict]:
     return dfToListOfDicts(cargarActivosDf())
 
 # ===== Historial de movimientos =====
-def cargarHistorialMovimientos(id_activo: str, fecha_inicio: str = None, fecha_fin: str = None) -> pd.DataFrame:
+def cargarHistorialMovimientos(
+    id_activo: str,
+    fecha_inicio: str | pd.Timestamp | None = None,
+    fecha_fin: str | pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """
+    Devuelve el historial del activo recortado a la retención de 90 días.
+    - Si no se informan fechas: consulta [hoy-90, hoy].
+    - Si el usuario elige fechas fuera del marco: se recortan a [hoy-90, hoy].
+    - El día 'Hasta' se interpreta de forma inclusiva.
+    """
     cols = ["id_activo", "latitud", "longitud", "fecha", "detalle"]
+
     try:
         df = readTable(histXlsx, histCsv, cols)
     except Exception:
         df = pd.DataFrame(columns=cols)
 
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    # Normalizaciones básicas
+    df = df.copy()
+    df["id_activo"] = df["id_activo"].astype(str).str.strip()
+    df["latitud"]   = pd.to_numeric(df["latitud"], errors="coerce")
+    df["longitud"]  = pd.to_numeric(df["longitud"], errors="coerce")
+    df["fecha"]     = pd.to_datetime(df["fecha"], errors="coerce")
+
+    # Filtrado por activo y limpieza de fechas inválidas
+    aid = str(id_activo).strip()
+    df = df[(df["id_activo"] == aid) & df["fecha"].notna()]
     if df.empty:
-        return df
+        return pd.DataFrame(columns=cols)
 
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
-    df = df[df["id_activo"].astype(str).str.strip() == str(id_activo).strip()]
+    # Ventana de retención
+    hoy = pd.Timestamp.today().normalize()
+    limite_90 = hoy - pd.Timedelta(days=90)
 
-    if fecha_inicio:
-        df = df[df["fecha"] >= pd.to_datetime(fecha_inicio, errors="coerce")]
-    if fecha_fin:
-        df = df[df["fecha"] <= pd.to_datetime(fecha_fin, errors="coerce")]
+    # Construcción del rango solicitado
+    desde = pd.to_datetime(fecha_inicio, errors="coerce") if fecha_inicio is not None else None
+    hasta = pd.to_datetime(fecha_fin,     errors="coerce") if fecha_fin     is not None else None
 
-    return df.sort_values("fecha", ascending=False).reset_index(drop=True)
+    # Defaults si vienen vacíos
+    if desde is None or pd.isna(desde):
+        desde = limite_90
+    if hasta is None or pd.isna(hasta):
+        hasta = hoy
+
+    # Corrección de inversión
+    if desde > hasta:
+        desde, hasta = hasta, desde
+
+    # Inclusión del día 'hasta' cuando viene sin hora
+    if hasta == hasta.normalize():
+        hasta = hasta + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+
+    # Recortes duros a la política de retención
+    desde = max(desde, limite_90)
+    hasta = min(hasta, hoy + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1))
+
+    # Filtro final y orden
+    df = df[(df["fecha"] >= desde) & (df["fecha"] <= hasta)]
+    df = df.sort_values("fecha", ascending=False).reset_index(drop=True)
+
+    # Reordenar columnas por consistencia
+    return df[["id_activo", "latitud", "longitud", "fecha", "detalle"]]
 
 def registrarMovimiento(id_activo: str, latitud: float, longitud: float, detalle: str = "actualización de posición") -> None:
     cols = ["id_activo", "latitud", "longitud", "fecha", "detalle"]
